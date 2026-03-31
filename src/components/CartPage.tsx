@@ -1,9 +1,12 @@
-import React from "react";
-import { Trash2, Plus, Minus, ArrowLeft, ShoppingBag, ChevronRight } from "lucide-react";
+import React, { useState } from "react";
+import { Trash2, Plus, Minus, ArrowLeft, ShoppingBag, ChevronRight, Zap } from "lucide-react";
 import { useCartStore } from "../store/cartStore";
+import { useAuthStore } from "../store/authStore";
+import { CheckoutModal } from "./CheckoutModal";
 
 interface CartPageProps {
   onBack?: () => void;
+  onOrderPlaced?: () => void;
 }
 
 // Inline styles for the component — no Tailwind dependency
@@ -347,11 +350,16 @@ function CakeEmoji({ style }: { style?: React.CSSProperties }) {
   return <span style={style}>🎂</span>;
 }
 
-export function CartPage({ onBack }: CartPageProps) {
-  const { items, updateQty, removeItem } = useCartStore();
+export function CartPage({ onBack, onOrderPlaced }: CartPageProps) {
+  const { items, updateQty, removeItem, clearCart } = useCartStore();
+  const user = useAuthStore((s) => s.user);
+  const [rushOrder, setRushOrder] = useState(false);
+  const [showCheckout, setShowCheckout] = useState(false);
 
   const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const downpayment = Math.round(subtotal * 0.5);
+  const rushFee = rushOrder ? Math.round(subtotal * 0.2) : 0;
+  const total = subtotal + rushFee;
+  const downpayment = Math.round(total * 0.5);
   const isEmpty = items.length === 0;
 
   return (
@@ -486,16 +494,74 @@ export function CartPage({ onBack }: CartPageProps) {
                   <span style={styles.subtotalValue}>₱{subtotal.toLocaleString()}</span>
                 </div>
 
+                {/* Rush Order Toggle */}
+                <div
+                  onClick={() => setRushOrder(!rushOrder)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "12px 14px",
+                    marginBottom: 12,
+                    borderRadius: 12,
+                    border: `1px solid ${rushOrder ? "#c77db3" : "rgba(216,159,200,0.3)"}`,
+                    background: rushOrder ? "rgba(199,125,179,0.08)" : "rgba(216,159,200,0.04)",
+                    cursor: "pointer",
+                    transition: "all 0.2s",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Zap size={15} color={rushOrder ? "#c77db3" : "#8b6f84"} />
+                    <div>
+                      <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: rushOrder ? "#c77db3" : "#4a2e42", fontFamily: "system-ui, sans-serif" }}>
+                        Rush Order
+                      </p>
+                      <p style={{ margin: 0, fontSize: 11, color: "#8b6f84", fontFamily: "system-ui, sans-serif" }}>
+                        +20% · Priority processing
+                      </p>
+                    </div>
+                  </div>
+                  <div style={{
+                    width: 36,
+                    height: 20,
+                    borderRadius: 10,
+                    background: rushOrder ? "#c77db3" : "rgba(216,159,200,0.3)",
+                    position: "relative",
+                    transition: "background 0.2s",
+                    flexShrink: 0,
+                  }}>
+                    <div style={{
+                      position: "absolute",
+                      top: 2,
+                      left: rushOrder ? 18 : 2,
+                      width: 16,
+                      height: 16,
+                      borderRadius: "50%",
+                      background: "#fff",
+                      transition: "left 0.2s",
+                      boxShadow: "0 1px 4px rgba(0,0,0,0.15)",
+                    }} />
+                  </div>
+                </div>
+
+                {rushOrder && (
+                  <div style={{ ...styles.summaryLine, marginBottom: 14 }}>
+                    <span style={{ ...styles.summaryItemName, color: "#c77db3" }}>Rush fee (20%)</span>
+                    <span style={{ ...styles.summaryItemPrice, color: "#c77db3" }}>+₱{rushFee.toLocaleString()}</span>
+                  </div>
+                )}
+
                 <div style={styles.downpayCard}>
                   <div>
                     <p style={styles.downpayLabel}>Downpayment Due</p>
-                    <p style={styles.downpaySub}>50% required to confirm order</p>
+                    <p style={styles.downpaySub}>50% of ₱{total.toLocaleString()}</p>
                   </div>
                   <span style={styles.downpayAmount}>₱{downpayment.toLocaleString()}</span>
                 </div>
 
                 <button
                   style={styles.checkoutBtn}
+                  onClick={() => setShowCheckout(true)}
                   onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.9"; e.currentTarget.style.transform = "translateY(-1px)"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "none"; }}
                 >
@@ -537,6 +603,25 @@ export function CartPage({ onBack }: CartPageProps) {
           )}
         </div>
       </div>
+
+      {showCheckout && user && (
+        <CheckoutModal
+          items={items}
+          subtotal={subtotal}
+          rushFee={rushFee}
+          total={total}
+          downpayment={downpayment}
+          isRushOrder={rushOrder}
+          userId={user.uid}
+          userName={user.displayName ?? user.email ?? "Customer"}
+          onClose={() => setShowCheckout(false)}
+          onSuccess={() => {
+            clearCart();
+            setShowCheckout(false);
+            onOrderPlaced?.();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -28,6 +28,10 @@ export function useCartSync(uid: string | null | undefined) {
   // Save cart to Firebase whenever items change
   useEffect(() => {
     if (!uid || isLoading.current) return;
-    set(ref(db, `carts/${uid}`), items);
+    // Strip undefined values — Firebase rejects them
+    const clean = items.map((item) =>
+      Object.fromEntries(Object.entries(item).filter(([, v]) => v !== undefined))
+    );
+    set(ref(db, `carts/${uid}`), clean);
   }, [uid, items]);
 }

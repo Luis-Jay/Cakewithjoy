@@ -5,4 +5,5 @@ export interface AuthUser {
   email: string | null;
   displayName: string | null;
   role: UserRole;
+  isActive: boolean;
 }

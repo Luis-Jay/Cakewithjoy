@@ -14,6 +14,10 @@ import { StaffAnnouncements } from "./components/StaffAnnouncements";
 import { ProductionDashboard } from "./components/ProductionDashboard";
 import { ProductionSchedule } from "./components/ProductionSchedule";
 import { CartPage } from "./components/CartPage";
+import { OrderManagement } from "./components/OrderManagement";
+import { MenuManagement } from "./components/MenuManagement";
+import { StoreSettings } from "./components/StoreSettings";
+import { PricingManagement } from "./components/PricingManagement";
 import { Spinner } from "./components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "./components/ui/tabs";
 import {
@@ -26,6 +30,9 @@ import {
   UserCog,
   Bell,
   CalendarClock,
+  ClipboardList,
+  Settings,
+  DollarSign,
 } from "lucide-react";
 import { useAuth } from "./hooks/useAuth";
 import { authService } from "./services/authService";
@@ -34,19 +41,21 @@ import { useCartSync } from "./hooks/useCartSync";
 
 type CustomerView = "home" | "customize" | "menu" | "orders" | "cart";
 type StaffView = "staff-dashboard" | "order-summary" | "inventory" | "announcements" | "production-schedule";
-type AdminView = "admin" | "order-summary" | "inventory" | "staff-management" | "announcements" | "production-schedule";
+type AdminView = "admin" | "order-management" | "menu-management" | "store-settings" | "pricing-management" | "order-summary" | "inventory" | "staff-management" | "announcements" | "production-schedule";
 type View = CustomerView | StaffView | AdminView;
 
 export default function App() {
   const { user, isLoading } = useAuth();
   const [currentView, setCurrentView] = React.useState<View>("home");
   const [autoOpenUpload, setAutoOpenUpload] = React.useState(false);
+  const [menuCategory, setMenuCategory] = React.useState<string | undefined>(undefined);
   const cartItems = useCartStore((s) => s.items);
   const cartCount = cartItems.reduce((sum, i) => sum + i.quantity, 0);
   useCartSync(user?.uid);
 
-  const handleCustomerNavigate = (view: string, options?: { autoOpenUpload?: boolean }) => {
+  const handleCustomerNavigate = (view: string, options?: { autoOpenUpload?: boolean; category?: string }) => {
     setAutoOpenUpload(options?.autoOpenUpload ?? false);
+    setMenuCategory(options?.category);
     setCurrentView(view as View);
   };
 
@@ -74,6 +83,29 @@ export default function App() {
     );
   }
 
+  // Inactive staff/admin — blocked screen
+  if (user && user.isActive === false) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-4 text-center max-w-sm px-6">
+          <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center">
+            <span className="text-3xl">🔒</span>
+          </div>
+          <h2 className="text-xl font-semibold text-foreground">Account Deactivated</h2>
+          <p className="text-muted-foreground text-sm">
+            Your account has been deactivated. Please contact your administrator to regain access.
+          </p>
+          <button
+            onClick={handleLogout}
+            className="mt-2 px-6 py-2 rounded-full text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            Sign Out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // Show login if not authenticated
   if (!user) {
     return <Login />;
@@ -83,6 +115,10 @@ export default function App() {
     if (user.role === "admin") {
       switch (currentView) {
         case "admin": return <SalesDashboard />;
+        case "order-management": return <OrderManagement />;
+        case "menu-management": return <MenuManagement />;
+        case "store-settings": return <StoreSettings />;
+        case "pricing-management": return <PricingManagement />;
         case "inventory": return <InventoryManagement />;
         case "order-summary": return <OrderSummaryCards />;
         case "staff-management": return <StaffManagement />;
@@ -103,9 +139,9 @@ export default function App() {
       switch (currentView) {
         case "home": return <CustomerHomepage onNavigate={handleCustomerNavigate} />;
         case "customize": return <CakeCustomization onGoToCart={() => setCurrentView("cart")} autoOpenUpload={autoOpenUpload} />;
-        case "menu": return <ReadyMadeCakes />;
+        case "menu": return <ReadyMadeCakes initialCategory={menuCategory} />;
         case "orders": return <OrderTracking />;
-        case "cart": return <CartPage onBack={() => setCurrentView("home")} />;
+        case "cart": return <CartPage onBack={() => setCurrentView("home")} onOrderPlaced={() => setCurrentView("orders")} />;
         default: return <CustomerHomepage />;
       }
     }
@@ -131,6 +167,18 @@ export default function App() {
               <TabsList className="bg-transparent border-b-0 h-12">
                 <TabsTrigger value="admin" className={tabTriggerClass}>
                   <LayoutDashboard className="w-4 h-4" /> Dashboard
+                </TabsTrigger>
+                <TabsTrigger value="order-management" className={tabTriggerClass}>
+                  <ClipboardList className="w-4 h-4" /> Orders
+                </TabsTrigger>
+                <TabsTrigger value="menu-management" className={tabTriggerClass}>
+                  <Cake className="w-4 h-4" /> Menu
+                </TabsTrigger>
+                <TabsTrigger value="store-settings" className={tabTriggerClass}>
+                  <Settings className="w-4 h-4" /> Settings
+                </TabsTrigger>
+                <TabsTrigger value="pricing-management" className={tabTriggerClass}>
+                  <DollarSign className="w-4 h-4" /> Pricing
                 </TabsTrigger>
                 <TabsTrigger value="order-summary" className={tabTriggerClass}>
                   <FileText className="w-4 h-4" /> Order Summary
