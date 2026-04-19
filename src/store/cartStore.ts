@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
 export interface CartItem {
   id: string;
@@ -6,6 +7,7 @@ export interface CartItem {
   description: string;
   price: number;
   quantity: number;
+  cakeImage?: string;
   discountType?: string;
   idPhoto?: string;
   idHoldingPhoto?: string;
@@ -20,33 +22,41 @@ interface CartState {
   clearCart: () => void;
 }
 
-export const useCartStore = create<CartState>((set) => ({
-  items: [],
+export const useCartStore = create<CartState>()(
+  persist(
+    (set) => ({
+      items: [],
 
-  setItems: (items) => set({ items }),
+      setItems: (items) => set({ items }),
 
-  addItem: (newItem) =>
-    set((state) => {
-      const existing = state.items.find((i) => i.id === newItem.id);
-      if (existing) {
-        return {
-          items: state.items.map((i) =>
-            i.id === newItem.id ? { ...i, quantity: i.quantity + 1 } : i
-          ),
-        };
-      }
-      return { items: [...state.items, { ...newItem, quantity: 1 }] };
+      addItem: (newItem) =>
+        set((state) => {
+          const existing = state.items.find((i) => i.id === newItem.id);
+          if (existing) {
+            return {
+              items: state.items.map((i) =>
+                i.id === newItem.id ? { ...i, quantity: i.quantity + 1 } : i
+              ),
+            };
+          }
+          return { items: [...state.items, { ...newItem, quantity: 1 }] };
+        }),
+
+      updateQty: (id, delta) =>
+        set((state) => ({
+          items: state.items
+            .map((i) => (i.id === id ? { ...i, quantity: i.quantity + delta } : i))
+            .filter((i) => i.quantity > 0),
+        })),
+
+      removeItem: (id) =>
+        set((state) => ({ items: state.items.filter((i) => i.id !== id) })),
+
+      clearCart: () => set({ items: [] }),
     }),
-
-  updateQty: (id, delta) =>
-    set((state) => ({
-      items: state.items
-        .map((i) => (i.id === id ? { ...i, quantity: i.quantity + delta } : i))
-        .filter((i) => i.quantity > 0),
-    })),
-
-  removeItem: (id) =>
-    set((state) => ({ items: state.items.filter((i) => i.id !== id) })),
-
-  clearCart: () => set({ items: [] }),
-}));
+    {
+      name: "bms-cart",
+      partialize: (state) => ({ items: state.items }),
+    }
+  )
+);

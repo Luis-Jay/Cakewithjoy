@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import { ref, get, set } from "firebase/database";
 import { db } from "../config/firebase";
 import { useCartStore } from "../store/cartStore";
-import type { CartItem } from "../store/cartStore";
 
 export function useCartSync(uid: string | null | undefined) {
   const setItems = useCartStore((s) => s.setItems);
@@ -12,7 +11,6 @@ export function useCartSync(uid: string | null | undefined) {
   // Load cart from Firebase when user logs in
   useEffect(() => {
     if (!uid) {
-      setItems([]);
       return;
     }
 
@@ -23,7 +21,7 @@ export function useCartSync(uid: string | null | undefined) {
     }).finally(() => {
       isLoading.current = false;
     });
-  }, [uid]);
+  }, [uid, setItems]);
 
   // Save cart to Firebase whenever items change
   useEffect(() => {

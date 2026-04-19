@@ -42,12 +42,14 @@ function getFirebaseErrorMessage(error: unknown): string {
   return "Something went wrong. Please try again.";
 }
 
-export function Login() {
+export function Login({ onGuestBrowse }: { onGuestBrowse?: () => void }) {
   // Login state
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
+  const [loginNotice, setLoginNotice] = useState("");
   const [isLoginLoading, setIsLoginLoading] = useState(false);
+  const [isResendingVerification, setIsResendingVerification] = useState(false);
 
   // Register state
   const [registerName, setRegisterName] = useState("");
@@ -57,6 +59,7 @@ export function Login() {
   const [isRegisterOpen, setIsRegisterOpen] = useState(false);
   const [registerError, setRegisterError] = useState("");
   const [isRegisterLoading, setIsRegisterLoading] = useState(false);
+  const [registerSuccessEmail, setRegisterSuccessEmail] = useState("");
 
   // Forgot password state
   const [isForgotOpen, setIsForgotOpen] = useState(false);
@@ -108,12 +111,17 @@ export function Login() {
   const handleLogin = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     setLoginError("");
+    setLoginNotice("");
     setIsLoginLoading(true);
     try {
       await authService.login(email, password);
       // onAuthStateChanged in useAuth hook will update the store automatically
     } catch (error) {
-      setLoginError(getFirebaseErrorMessage(error));
+      if (error instanceof Error && error.message === "EMAIL_NOT_VERIFIED") {
+        setLoginError("Please verify your email before signing in. Check your inbox or resend the verification email below.");
+      } else {
+        setLoginError(getFirebaseErrorMessage(error));
+      }
     } finally {
       setIsLoginLoading(false);
     }
@@ -122,6 +130,7 @@ export function Login() {
   const handleRegister = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     setRegisterError("");
+    setLoginNotice("");
 
     if (registerPassword !== registerConfirmPassword) {
       setRegisterError("Passwords do not match.");
@@ -135,8 +144,14 @@ export function Login() {
     setIsRegisterLoading(true);
     try {
       await authService.register(registerEmail, registerPassword, registerName);
-      // onAuthStateChanged will fire and log the user in automatically
-      setIsRegisterOpen(false);
+      setLoginNotice(`We sent a verification email to ${registerEmail}. Please verify your account before signing in.`);
+      setEmail(registerEmail);
+      setPassword("");
+      setRegisterSuccessEmail(registerEmail);
+      setRegisterName("");
+      setRegisterEmail("");
+      setRegisterPassword("");
+      setRegisterConfirmPassword("");
     } catch (error) {
       setRegisterError(getFirebaseErrorMessage(error));
     } finally {
@@ -156,6 +171,25 @@ export function Login() {
       setForgotError(getFirebaseErrorMessage(error));
     } finally {
       setIsForgotLoading(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    if (!email.trim() || !password.trim()) {
+      setLoginError("Enter the same email and password first, then resend the verification email.");
+      return;
+    }
+
+    setIsResendingVerification(true);
+    setLoginError("");
+    setLoginNotice("");
+    try {
+      await authService.resendVerificationEmail(email, password);
+      setLoginNotice(`Verification email resent to ${email}. Please check your inbox and spam folder.`);
+    } catch (error) {
+      setLoginError(getFirebaseErrorMessage(error));
+    } finally {
+      setIsResendingVerification(false);
     }
   };
 
@@ -302,7 +336,9 @@ export function Login() {
                   open={isForgotOpen}
                   onOpenChange={(open: boolean) => {
                     setIsForgotOpen(open);
-                    if (!open) {
+                    if (open) {
+                      setLoginError("");
+                    } else {
                       setForgotEmail("");
                       setForgotError("");
                       setForgotSuccess(false);
@@ -326,10 +362,10 @@ export function Login() {
                     </DialogHeader>
                     <form onSubmit={handleForgotPassword} className="space-y-4 p-6">
                       {forgotSuccess ? (
-                        <div className="flex items-center gap-2 text-green-600 bg-green-50 p-3 rounded-lg">
-                          <CheckCircle className="w-5 h-5 shrink-0" />
+                        <div className="flex items-start gap-2 text-green-600 bg-green-50 p-3 rounded-lg">
+                          <CheckCircle className="w-5 h-5 shrink-0 mt-0.5" />
                           <p>
-                            Reset link sent to <strong>{forgotEmail}</strong>. Check your inbox.
+                            If <strong>{forgotEmail}</strong> is registered with us, a reset link has been sent. Check your inbox (and spam folder).
                           </p>
                         </div>
                       ) : (
@@ -386,7 +422,71 @@ export function Login() {
                   {loginError}
                 </motion.div>
               )}
+
+              {loginNotice && (
+                <motion.div
+                  initial={{ x: -20, opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  className="flex items-start gap-2 text-green-700 text-sm rounded-lg bg-green-50 border border-green-200 p-3"
+                >
+                  <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{loginNotice}</span>
+                </motion.div>
+              )}
+
+              {loginError.includes("verify your email") && (
+                <motion.div
+                  initial={{ x: -20, opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  className="pt-1"
+                >
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    disabled={isResendingVerification}
+                    onClick={handleResendVerification}
+                  >
+                    {isResendingVerification ? (
+                      <div className="flex items-center justify-center">
+                        <Spinner className="w-4 h-4 mr-2" />
+                        Resending...
+                      </div>
+                    ) : (
+                      "Resend Verification Email"
+                    )}
+                  </Button>
+                </motion.div>
+              )}
             </form>
+
+            {/* Browse as Guest */}
+            {onGuestBrowse && (
+              <motion.div
+                initial={{ x: -20, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                transition={{ duration: 0.5, delay: 1.2 }}
+                className="mt-2"
+              >
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-border" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-card px-3 text-muted-foreground/60 tracking-wider font-medium">or</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={onGuestBrowse}
+                  className="w-full py-3 rounded-xl border border-border/60 bg-muted/30 text-foreground/70 hover:bg-muted/60 hover:border-primary/30 hover:text-foreground transition-all duration-200 text-sm font-medium flex items-center justify-center gap-2.5 group"
+                >
+                  <span className="text-base leading-none group-hover:scale-110 transition-transform duration-200">🧁</span>
+                  Continue as Guest
+                  <span className="ml-auto text-muted-foreground/40 group-hover:text-primary/50 transition-colors text-xs">Browse only</span>
+                </button>
+              </motion.div>
+            )}
 
             {/* Sign Up */}
             <motion.div
@@ -403,7 +503,12 @@ export function Login() {
                       Sign up
                     </button>
                   </DialogTrigger>
-                  <DialogContent className="sm:max-w-md bg-white border border-border/50">
+                  <DialogContent
+                    className="sm:max-w-md bg-white border border-border/50"
+                    onInteractOutside={(event) => {
+                      if (registerSuccessEmail) event.preventDefault();
+                    }}
+                  >
                     <DialogHeader className="p-6 pb-0">
                       <motion.h3
                         initial={{ y: -20, opacity: 0 }}
@@ -411,7 +516,7 @@ export function Login() {
                         transition={{ duration: 0.5 }}
                         className="text-xl font-bold text-primary"
                       >
-                        Create Account
+                        {registerSuccessEmail ? "Verify Your Email" : "Create Account"}
                       </motion.h3>
                       <motion.p
                         initial={{ y: -20, opacity: 0 }}
@@ -419,114 +524,141 @@ export function Login() {
                         transition={{ duration: 0.5, delay: 0.1 }}
                         className="text-muted-foreground"
                       >
-                        Fill in your details to create a new account
+                        {registerSuccessEmail
+                          ? "Your account was created successfully. One more step and you're ready to sign in."
+                          : "Fill in your details to create a new account"}
                       </motion.p>
                     </DialogHeader>
-
-                    <motion.form
-                      initial={{ y: 20, opacity: 0 }}
-                      animate={{ y: 0, opacity: 1 }}
-                      transition={{ duration: 0.5, delay: 0.2 }}
-                      onSubmit={handleRegister}
-                      className="space-y-4 p-6"
-                    >
-                      <div className="space-y-2">
-                        <Label htmlFor="register-name">Full Name</Label>
-                        <div className="relative">
-                          <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                          <Input
-                            id="register-name"
-                            type="text"
-                            placeholder="Enter your full name"
-                            value={registerName}
-                            onChange={(e) => setRegisterName(e.target.value)}
-                            className="pl-10 pr-4 py-3 bg-card/50 backdrop-blur-sm border border-border/50 hover:border-primary/50 focus:border-primary/70 transition-all"
-                            required
-                          />
-                        </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="register-email">Email</Label>
-                        <div className="relative">
-                          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                          <Input
-                            id="register-email"
-                            type="email"
-                            placeholder="Enter your email"
-                            value={registerEmail}
-                            onChange={(e) => setRegisterEmail(e.target.value)}
-                            className="pl-10 pr-4 py-3 bg-card/50 backdrop-blur-sm border border-border/50 hover:border-primary/50 focus:border-primary/70 transition-all"
-                            required
-                          />
-                        </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="register-password">Password</Label>
-                        <div className="relative">
-                          <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                          <Input
-                            id="register-password"
-                            type="password"
-                            placeholder="Create a password (min. 6 characters)"
-                            value={registerPassword}
-                            onChange={(e) => setRegisterPassword(e.target.value)}
-                            className="pl-10 pr-4 py-3 bg-card/50 backdrop-blur-sm border border-border/50 hover:border-primary/50 focus:border-primary/70 transition-all"
-                            required
-                          />
-                        </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="register-confirm-password">
-                          Confirm Password
-                        </Label>
-                        <div className="relative">
-                          <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                          <Input
-                            id="register-confirm-password"
-                            type="password"
-                            placeholder="Confirm your password"
-                            value={registerConfirmPassword}
-                            onChange={(e) =>
-                              setRegisterConfirmPassword(e.target.value)
-                            }
-                            className="pl-10 pr-4 py-3 bg-card/50 backdrop-blur-sm border border-border/50 hover:border-primary/50 focus:border-primary/70 transition-all"
-                            required
-                          />
-                        </div>
-                      </div>
-
-                      <div className="p-3 bg-secondary/20 rounded-lg border border-border">
-                        <p className="text-sm text-muted-foreground">
-                          By creating an account, you agree to our Terms of
-                          Service and Privacy Policy.
-                        </p>
-                      </div>
-
-                      {registerError && (
-                        <div className="flex items-center gap-2 text-red-500 text-sm">
-                          <AlertCircle className="w-4 h-4 shrink-0" />
-                          {registerError}
-                        </div>
-                      )}
-
-                      <Button
-                        type="submit"
-                        className="w-full bg-primary hover:bg-primary/90"
-                        disabled={isRegisterLoading}
-                      >
-                        {isRegisterLoading ? (
-                          <div className="flex items-center justify-center">
-                            <Spinner className="w-4 h-4 mr-2" />
-                            Creating account...
+                    {registerSuccessEmail ? (
+                      <div className="space-y-4 p-6">
+                        <div className="flex items-start gap-3 rounded-xl border border-green-200 bg-green-50 p-4 text-green-800">
+                          <CheckCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                          <div className="space-y-2 text-sm">
+                            <p>
+                              We sent a verification email to <strong>{registerSuccessEmail}</strong>.
+                            </p>
+                            <p>
+                              Open that email, click the verification link, then come back here and sign in. If you don't see it, check your spam or junk folder.
+                            </p>
                           </div>
-                        ) : (
-                          "Create Account"
+                        </div>
+                        <Button
+                          type="button"
+                          className="w-full bg-primary hover:bg-primary/90"
+                          onClick={() => {
+                            setRegisterSuccessEmail("");
+                            setIsRegisterOpen(false);
+                          }}
+                        >
+                          Back to Sign In
+                        </Button>
+                      </div>
+                    ) : (
+                      <motion.form
+                        initial={{ y: 20, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        transition={{ duration: 0.5, delay: 0.2 }}
+                        onSubmit={handleRegister}
+                        className="space-y-4 p-6"
+                      >
+                        <div className="space-y-2">
+                          <Label htmlFor="register-name">Full Name</Label>
+                          <div className="relative">
+                            <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                            <Input
+                              id="register-name"
+                              type="text"
+                              placeholder="Enter your full name"
+                              value={registerName}
+                              onChange={(e) => setRegisterName(e.target.value)}
+                              className="pl-10 pr-4 py-3 bg-card/50 backdrop-blur-sm border border-border/50 hover:border-primary/50 focus:border-primary/70 transition-all"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="register-email">Email</Label>
+                          <div className="relative">
+                            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                            <Input
+                              id="register-email"
+                              type="email"
+                              placeholder="Enter your email"
+                              value={registerEmail}
+                              onChange={(e) => setRegisterEmail(e.target.value)}
+                              className="pl-10 pr-4 py-3 bg-card/50 backdrop-blur-sm border border-border/50 hover:border-primary/50 focus:border-primary/70 transition-all"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="register-password">Password</Label>
+                          <div className="relative">
+                            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                            <Input
+                              id="register-password"
+                              type="password"
+                              placeholder="Create a password (min. 6 characters)"
+                              value={registerPassword}
+                              onChange={(e) => setRegisterPassword(e.target.value)}
+                              className="pl-10 pr-4 py-3 bg-card/50 backdrop-blur-sm border border-border/50 hover:border-primary/50 focus:border-primary/70 transition-all"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="register-confirm-password">
+                            Confirm Password
+                          </Label>
+                          <div className="relative">
+                            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                            <Input
+                              id="register-confirm-password"
+                              type="password"
+                              placeholder="Confirm your password"
+                              value={registerConfirmPassword}
+                              onChange={(e) =>
+                                setRegisterConfirmPassword(e.target.value)
+                              }
+                              className="pl-10 pr-4 py-3 bg-card/50 backdrop-blur-sm border border-border/50 hover:border-primary/50 focus:border-primary/70 transition-all"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        <div className="p-3 bg-secondary/20 rounded-lg border border-border">
+                          <p className="text-sm text-muted-foreground">
+                            By creating an account, you agree to our Terms of
+                            Service and Privacy Policy.
+                          </p>
+                        </div>
+
+                        {registerError && (
+                          <div className="flex items-center gap-2 text-red-500 text-sm">
+                            <AlertCircle className="w-4 h-4 shrink-0" />
+                            {registerError}
+                          </div>
                         )}
-                      </Button>
-                    </motion.form>
+
+                        <Button
+                          type="submit"
+                          className="w-full bg-primary hover:bg-primary/90"
+                          disabled={isRegisterLoading}
+                        >
+                          {isRegisterLoading ? (
+                            <div className="flex items-center justify-center">
+                              <Spinner className="w-4 h-4 mr-2" />
+                              Creating account...
+                            </div>
+                          ) : (
+                            "Create Account"
+                          )}
+                        </Button>
+                      </motion.form>
+                    )}
                   </DialogContent>
                 </Dialog>
               </p>

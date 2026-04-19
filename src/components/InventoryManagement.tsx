@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { Fragment, useState, useEffect } from "react";
+import { ref, onValue, push, set, remove, update } from "firebase/database";
+import { db } from "../config/firebase";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -29,6 +31,7 @@ import {
   DialogTrigger,
 } from "./ui/dialog";
 import { Search, Plus, Edit, Trash2, AlertTriangle, Calendar, Package, ChevronDown, ChevronRight } from "lucide-react";
+import { toast } from "sonner@2.0.3";
 
 interface Batch {
   id: string;
@@ -37,7 +40,7 @@ interface Batch {
 }
 
 interface InventoryItem {
-  id: number;
+  id: string;
   name: string;
   batches: Batch[];
   unit: string;
@@ -45,129 +48,56 @@ interface InventoryItem {
   lastUpdated: string;
 }
 
+const createBatchId = () => `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
 export function InventoryManagement() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
-  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([
-    {
-      id: 1,
-      name: "All-Purpose Flour",
-      batches: [
-        { id: "1a", quantity: 15, expirationDate: "2025-12-15" },
-        { id: "1b", quantity: 10, expirationDate: "2026-01-20" },
-        { id: "1c", quantity: 5, expirationDate: "2026-02-10" },
-      ],
-      unit: "kg",
-      lowStockThreshold: 5,
-      lastUpdated: "Nov 10, 2025",
-    },
-    {
-      id: 2,
-      name: "Granulated Sugar",
-      batches: [
-        { id: "2a", quantity: 8, expirationDate: "2026-03-10" },
-        { id: "2b", quantity: 7, expirationDate: "2026-04-15" },
-        { id: "2c", quantity: 5, expirationDate: "2026-05-20" },
-      ],
-      unit: "kg",
-      lowStockThreshold: 5,
-      lastUpdated: "Nov 10, 2025",
-    },
-    {
-      id: 3,
-      name: "Unsalted Butter",
-      batches: [
-        { id: "3a", quantity: 1, expirationDate: "2025-12-05" },
-        { id: "3b", quantity: 2, expirationDate: "2025-12-20" },
-      ],
-      unit: "kg",
-      lowStockThreshold: 5,
-      lastUpdated: "Nov 11, 2025",
-    },
-    {
-      id: 4,
-      name: "Vanilla Extract",
-      batches: [
-        { id: "4a", quantity: 300, expirationDate: "2026-06-15" },
-        { id: "4b", quantity: 200, expirationDate: "2026-08-20" },
-        { id: "4c", quantity: 150, expirationDate: "2026-10-05" },
-        { id: "4d", quantity: 100, expirationDate: "2026-12-01" },
-      ],
-      unit: "ml",
-      lowStockThreshold: 100,
-      lastUpdated: "Nov 9, 2025",
-    },
-    {
-      id: 5,
-      name: "Cocoa Powder",
-      batches: [
-        { id: "5a", quantity: 0.5, expirationDate: "2026-01-30" },
-        { id: "5b", quantity: 1.5, expirationDate: "2026-03-15" },
-      ],
-      unit: "kg",
-      lowStockThreshold: 3,
-      lastUpdated: "Nov 11, 2025",
-    },
-    {
-      id: 6,
-      name: "Eggs (Large)",
-      batches: [
-        { id: "6a", quantity: 36, expirationDate: "2025-12-08" },
-        { id: "6b", quantity: 24, expirationDate: "2025-12-15" },
-      ],
-      unit: "pcs",
-      lowStockThreshold: 24,
-      lastUpdated: "Nov 11, 2025",
-    },
-    {
-      id: 7,
-      name: "Heavy Cream",
-      batches: [
-        { id: "7a", quantity: 0.5, expirationDate: "2025-12-03" },
-        { id: "7b", quantity: 1.5, expirationDate: "2025-12-10" },
-      ],
-      unit: "liters",
-      lowStockThreshold: 3,
-      lastUpdated: "Nov 11, 2025",
-    },
-    {
-      id: 8,
-      name: "Baking Powder",
-      batches: [
-        { id: "8a", quantity: 0.8, expirationDate: "2026-05-20" },
-        { id: "8b", quantity: 0.7, expirationDate: "2026-07-10" },
-      ],
-      unit: "kg",
-      lowStockThreshold: 0.5,
-      lastUpdated: "Nov 8, 2025",
-    },
-    {
-      id: 9,
-      name: "Powdered Sugar",
-      batches: [
-        { id: "9a", quantity: 6, expirationDate: "2026-02-25" },
-        { id: "9b", quantity: 4, expirationDate: "2026-04-10" },
-      ],
-      unit: "kg",
-      lowStockThreshold: 3,
-      lastUpdated: "Nov 10, 2025",
-    },
-    {
-      id: 10,
-      name: "Food Coloring Set",
-      batches: [
-        { id: "10a", quantity: 2, expirationDate: "2027-01-15" },
-        { id: "10b", quantity: 1, expirationDate: "2027-03-20" },
-      ],
-      unit: "sets",
-      lowStockThreshold: 2,
-      lastUpdated: "Nov 5, 2025",
-    },
-  ]);
+  // Add item form state
+  const [newItem, setNewItem] = useState({
+    name: "", unit: "",
+    qtyOnStock: "", expOnStock: "",
+    qtyNewStock: "", expNewStock: "",
+    lowStockThreshold: "",
+  });
+  const [addSaving, setAddSaving] = useState(false);
+  const [addError, setAddError] = useState("");
+  const [editBatches, setEditBatches] = useState<Batch[]>([]);
+  const [editLowStockThreshold, setEditLowStockThreshold] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+
+  useEffect(() => {
+    const unsub = onValue(ref(db, "inventory"), (snap) => {
+      const data = snap.val();
+      if (!data) { setInventoryItems([]); setLoading(false); return; }
+      const list: InventoryItem[] = Object.entries(data).map(([key, val]: [string, any]) => ({
+        id: key,
+        name: val.name ?? key,
+        batches: Array.isArray(val.batches)
+          ? val.batches
+          : val.batches && typeof val.batches === "object"
+          ? Object.entries(val.batches).map(([bKey, bVal]: [string, any]) => ({
+              id: bKey,
+              quantity: bVal.quantity ?? 0,
+              expirationDate: bVal.expirationDate ?? "",
+            }))
+          : [],
+        unit: val.unit ?? "",
+        lowStockThreshold: val.lowStockThreshold ?? 0,
+        lastUpdated: val.lastUpdated ?? "",
+      }));
+      setInventoryItems(list);
+      setLoading(false);
+    }, () => { setInventoryItems([]); setLoading(false); });
+    return () => unsub();
+  }, []);
 
   const lowStockItems = inventoryItems.filter((item) => item.batches.reduce((total, batch) => total + batch.quantity, 0) <= item.lowStockThreshold);
   const lowStockCount = lowStockItems.length;
@@ -178,10 +108,115 @@ export function InventoryManagement() {
 
   const handleEditItem = (item: InventoryItem) => {
     setSelectedItem(item);
+    setEditBatches(item.batches.map((batch) => ({ ...batch })));
+    setEditLowStockThreshold(String(item.lowStockThreshold ?? 0));
+    setEditError("");
     setIsEditModalOpen(true);
   };
 
-  const toggleRow = (itemId: number) => {
+  const closeEditModal = () => {
+    setIsEditModalOpen(false);
+    setSelectedItem(null);
+    setEditBatches([]);
+    setEditLowStockThreshold("");
+    setEditError("");
+  };
+
+  const updateEditBatch = (batchId: string, field: keyof Batch, value: string) => {
+    setEditError("");
+    setEditBatches((prev) =>
+      prev.map((batch) =>
+        batch.id === batchId
+          ? {
+              ...batch,
+              [field]: field === "quantity" ? Number(value) || 0 : value,
+            }
+          : batch
+      )
+    );
+  };
+
+  const removeEditBatch = (batchId: string) => {
+    setEditError("");
+    setEditBatches((prev) => prev.filter((batch) => batch.id !== batchId));
+  };
+
+  const addEditBatch = () => {
+    if (!selectedItem) return;
+    const batchId = createBatchId();
+    setEditError("");
+    setEditBatches((prev) => [
+      ...prev,
+      { id: batchId, quantity: 0, expirationDate: "" },
+    ]);
+  };
+
+  const saveItemChanges = async () => {
+    if (!selectedItem || editSaving) return;
+
+    const normalizedBatches = editBatches
+      .map((batch) => ({
+        ...batch,
+        quantity: Number(batch.quantity) || 0,
+        expirationDate: batch.expirationDate,
+      }))
+      .filter((batch) => batch.quantity > 0 || batch.expirationDate);
+
+    const hasInvalidBatch = normalizedBatches.some(
+      (batch) => batch.quantity < 0 || (batch.quantity > 0 && !batch.expirationDate)
+    );
+
+    if (hasInvalidBatch) {
+      setEditError("Each batch with stock must include an expiration date.");
+      return;
+    }
+
+    setEditError("");
+    setEditSaving(true);
+    try {
+      const batchesPayload = normalizedBatches.reduce<Record<string, { quantity: number; expirationDate: string }>>(
+        (acc, batch) => {
+          acc[batch.id] = {
+            quantity: batch.quantity,
+            expirationDate: batch.expirationDate,
+          };
+          return acc;
+        },
+        {}
+      );
+
+      await update(ref(db, `inventory/${selectedItem.id}`), {
+        batches: batchesPayload,
+        lowStockThreshold: Number(editLowStockThreshold) || 0,
+        lastUpdated: new Date().toISOString(),
+      });
+
+      toast.success("Inventory item updated successfully.");
+      closeEditModal();
+    } catch (error) {
+      console.error("Failed to update inventory item", error);
+      const message = "Could not save changes. Please check your Firebase permissions and try again.";
+      setEditError(message);
+      toast.error(message);
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const deleteInventoryItem = async (item: InventoryItem) => {
+    try {
+      await remove(ref(db, `inventory/${item.id}`));
+      toast.success("Inventory item deleted.");
+      if (selectedItem?.id === item.id) {
+        closeEditModal();
+      }
+    } catch (error) {
+      console.error("Failed to delete inventory item", error);
+      toast.error("Could not delete inventory item. Please check your Firebase permissions and try again.");
+    }
+  };
+
+  const toggleRow = (itemId: string) => {
     const newExpanded = new Set(expandedRows);
     if (newExpanded.has(itemId)) {
       newExpanded.delete(itemId);
@@ -212,6 +247,16 @@ export function InventoryManagement() {
     const today = new Date();
     return expirationDate < today;
   };
+
+  if (loading) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="flex items-center justify-center min-h-[300px]">
+          <p className="text-muted-foreground text-lg">Loading inventory…</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -278,38 +323,36 @@ export function InventoryManagement() {
                   </DialogHeader>
                   <div className="space-y-4 py-4">
                     <div className="space-y-2">
-                      <Label htmlFor="item-name">Item Name</Label>
-                      <Input id="item-name" placeholder="e.g., All-Purpose Flour" />
+                      <Label>Item Name</Label>
+                      <Input placeholder="e.g., All-Purpose Flour" value={newItem.name} onChange={(e) => setNewItem((p) => ({ ...p, name: e.target.value }))} />
                     </div>
-                    
+
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label htmlFor="qty-on-stock">Qty On-Stock</Label>
-                        <Input id="qty-on-stock" type="number" placeholder="0" />
+                        <Label>Qty On-Stock</Label>
+                        <Input type="number" placeholder="0" value={newItem.qtyOnStock} onChange={(e) => setNewItem((p) => ({ ...p, qtyOnStock: e.target.value }))} />
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="expiration-on-stock">Expiration (On-Stock)</Label>
-                        <Input id="expiration-on-stock" type="date" />
+                        <Label>Expiration (On-Stock)</Label>
+                        <Input type="date" value={newItem.expOnStock} onChange={(e) => setNewItem((p) => ({ ...p, expOnStock: e.target.value }))} />
                       </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label htmlFor="qty-new-stock">Qty New-Stock</Label>
-                        <Input id="qty-new-stock" type="number" placeholder="0" />
+                        <Label>Qty New-Stock</Label>
+                        <Input type="number" placeholder="0" value={newItem.qtyNewStock} onChange={(e) => setNewItem((p) => ({ ...p, qtyNewStock: e.target.value }))} />
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="expiration-new-stock">Expiration (New-Stock)</Label>
-                        <Input id="expiration-new-stock" type="date" />
+                        <Label>Expiration (New-Stock)</Label>
+                        <Input type="date" value={newItem.expNewStock} onChange={(e) => setNewItem((p) => ({ ...p, expNewStock: e.target.value }))} />
                       </div>
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor="unit">Unit</Label>
-                      <Select>
-                        <SelectTrigger id="unit">
-                          <SelectValue placeholder="Select unit" />
-                        </SelectTrigger>
+                      <Label>Unit</Label>
+                      <Select value={newItem.unit} onValueChange={(v) => setNewItem((p) => ({ ...p, unit: v }))}>
+                        <SelectTrigger><SelectValue placeholder="Select unit" /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="kg">Kilograms (kg)</SelectItem>
                           <SelectItem value="g">Grams (g)</SelectItem>
@@ -323,16 +366,51 @@ export function InventoryManagement() {
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor="low-stock-threshold">Low Stock Threshold</Label>
-                      <Input id="low-stock-threshold" type="number" placeholder="e.g., 5" />
+                      <Label>Low Stock Threshold</Label>
+                      <Input type="number" placeholder="e.g., 5" value={newItem.lowStockThreshold} onChange={(e) => setNewItem((p) => ({ ...p, lowStockThreshold: e.target.value }))} />
                     </div>
+                    {addError && (
+                      <p className="text-sm text-red-600">{addError}</p>
+                    )}
                   </div>
                   <DialogFooter>
-                    <Button variant="outline" onClick={() => setIsAddModalOpen(false)}>
-                      Cancel
-                    </Button>
-                    <Button className="bg-primary hover:bg-primary/90" onClick={() => setIsAddModalOpen(false)}>
-                      Add Item
+                    <Button variant="outline" onClick={() => { setAddError(""); setIsAddModalOpen(false); }}>Cancel</Button>
+                    <Button
+                      className="bg-primary hover:bg-primary/90"
+                      disabled={!newItem.name.trim() || !newItem.unit || addSaving}
+                      onClick={async () => {
+                        setAddError("");
+                        setAddSaving(true);
+                        try {
+                          const batches: Record<string, { quantity: number; expirationDate: string }> = {};
+                          if (newItem.qtyOnStock) {
+                            const bRef = createBatchId();
+                            batches[bRef] = { quantity: Number(newItem.qtyOnStock), expirationDate: newItem.expOnStock };
+                          }
+                          if (newItem.qtyNewStock) {
+                            const bRef2 = createBatchId();
+                            batches[bRef2] = { quantity: Number(newItem.qtyNewStock), expirationDate: newItem.expNewStock };
+                          }
+                          const itemRef = push(ref(db, "inventory"));
+                          await set(itemRef, {
+                            name: newItem.name.trim(),
+                            unit: newItem.unit,
+                            lowStockThreshold: Number(newItem.lowStockThreshold) || 0,
+                            batches: Object.keys(batches).length > 0 ? batches : {},
+                            lastUpdated: new Date().toISOString(),
+                          });
+                          setNewItem({ name: "", unit: "", qtyOnStock: "", expOnStock: "", qtyNewStock: "", expNewStock: "", lowStockThreshold: "" });
+                          setIsAddModalOpen(false);
+                          toast.success("Inventory item added successfully.");
+                        } catch (error) {
+                          console.error("Failed to add inventory item", error);
+                          const message = "Could not add inventory item. Please check your Firebase permissions and try again.";
+                          setAddError(message);
+                          toast.error(message);
+                        } finally { setAddSaving(false); }
+                      }}
+                    >
+                      {addSaving ? "Adding…" : "Add Item"}
                     </Button>
                   </DialogFooter>
                 </DialogContent>
@@ -359,13 +437,15 @@ export function InventoryManagement() {
                 {filteredItems.map((item) => {
                   const isExpanded = expandedRows.has(item.id);
                   const totalQty = getTotalQuantity(item.batches);
-                  const earliestExpiration = item.batches.reduce((earliest, batch) => {
-                    return new Date(batch.expirationDate) < new Date(earliest) ? batch.expirationDate : earliest;
-                  }, item.batches[0].expirationDate);
+                  const earliestExpiration = item.batches.length > 0
+                    ? item.batches.reduce((earliest, batch) => {
+                        return new Date(batch.expirationDate) < new Date(earliest) ? batch.expirationDate : earliest;
+                      }, item.batches[0].expirationDate)
+                    : "";
 
                   return (
-                    <>
-                      <TableRow key={item.id} className="hover:bg-muted/50">
+                    <Fragment key={item.id}>
+                      <TableRow className="hover:bg-muted/50">
                         <TableCell>
                           <Button
                             variant="ghost"
@@ -394,15 +474,19 @@ export function InventoryManagement() {
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-1">
-                            <Calendar className="w-3 h-3 text-muted-foreground" />
-                            <span className={
-                              isExpired(earliestExpiration) ? "text-red-600" :
-                              isExpiringSoon(earliestExpiration) ? "text-orange-600" : ""
-                            }>
-                              {formatDate(earliestExpiration)}
-                            </span>
-                          </div>
+                          {earliestExpiration ? (
+                            <div className="flex items-center gap-1">
+                              <Calendar className="w-3 h-3 text-muted-foreground" />
+                              <span className={
+                                isExpired(earliestExpiration) ? "text-red-600" :
+                                isExpiringSoon(earliestExpiration) ? "text-orange-600" : ""
+                              }>
+                                {formatDate(earliestExpiration)}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
                         </TableCell>
                         <TableCell>
                           {totalQty <= item.lowStockThreshold ? (
@@ -416,7 +500,16 @@ export function InventoryManagement() {
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
-                            <Dialog open={isEditModalOpen && selectedItem?.id === item.id} onOpenChange={setIsEditModalOpen}>
+                            <Dialog
+                              open={isEditModalOpen && selectedItem?.id === item.id}
+                              onOpenChange={(open) => {
+                                if (open) {
+                                  setIsEditModalOpen(true);
+                                } else {
+                                  closeEditModal();
+                                }
+                              }}
+                            >
                               <DialogTrigger asChild>
                                 <Button 
                                   size="sm" 
@@ -437,7 +530,7 @@ export function InventoryManagement() {
                                 </DialogHeader>
                                 <div className="space-y-4 py-4">
                                   {/* Display all batches */}
-                                  {selectedItem?.batches.map((batch, index) => (
+                                  {editBatches.map((batch, index) => (
                                     <div key={batch.id} className="border rounded-lg p-4 bg-muted/20">
                                       <div className="flex items-center justify-between mb-3">
                                         <Label className="font-semibold">Batch {index + 1}</Label>
@@ -445,6 +538,8 @@ export function InventoryManagement() {
                                           variant="ghost"
                                           size="sm"
                                           className="text-red-500 hover:text-red-700"
+                                          type="button"
+                                          onClick={() => removeEditBatch(batch.id)}
                                         >
                                           <Trash2 className="w-3 h-3" />
                                         </Button>
@@ -455,7 +550,9 @@ export function InventoryManagement() {
                                           <Input 
                                             id={`batch-qty-${batch.id}`}
                                             type="number" 
-                                            defaultValue={batch.quantity}
+                                            min="0"
+                                            value={String(batch.quantity)}
+                                            onChange={(e) => updateEditBatch(batch.id, "quantity", e.target.value)}
                                           />
                                         </div>
                                         <div className="space-y-2">
@@ -463,7 +560,8 @@ export function InventoryManagement() {
                                           <Input 
                                             id={`batch-exp-${batch.id}`}
                                             type="date" 
-                                            defaultValue={batch.expirationDate}
+                                            value={batch.expirationDate}
+                                            onChange={(e) => updateEditBatch(batch.id, "expirationDate", e.target.value)}
                                           />
                                         </div>
                                       </div>
@@ -475,6 +573,7 @@ export function InventoryManagement() {
                                     variant="outline"
                                     className="w-full gap-2"
                                     type="button"
+                                    onClick={addEditBatch}
                                   >
                                     <Plus className="w-4 h-4" />
                                     Add New Batch
@@ -484,7 +583,7 @@ export function InventoryManagement() {
                                     <div className="flex items-center justify-between">
                                       <span className="text-muted-foreground">Total Stock:</span>
                                       <span>
-                                        {getTotalQuantity(selectedItem?.batches || [])} {selectedItem?.unit}
+                                        {getTotalQuantity(editBatches)} {selectedItem?.unit}
                                       </span>
                                     </div>
                                   </div>
@@ -494,24 +593,38 @@ export function InventoryManagement() {
                                     <Input 
                                       id="edit-low-stock-threshold" 
                                       type="number" 
-                                      defaultValue={selectedItem?.lowStockThreshold}
+                                      min="0"
+                                      value={editLowStockThreshold}
+                                      onChange={(e) => {
+                                        setEditError("");
+                                        setEditLowStockThreshold(e.target.value);
+                                      }}
                                     />
                                   </div>
+                                  {editError && (
+                                    <p className="text-sm text-red-600">{editError}</p>
+                                  )}
                                 </div>
                                 <DialogFooter>
-                                  <Button variant="outline" onClick={() => setIsEditModalOpen(false)}>
+                                  <Button variant="outline" onClick={closeEditModal}>
                                     Cancel
                                   </Button>
                                   <Button 
                                     className="bg-primary hover:bg-primary/90" 
-                                    onClick={() => setIsEditModalOpen(false)}
+                                    onClick={saveItemChanges}
+                                    disabled={editSaving}
                                   >
-                                    Save Changes
+                                    {editSaving ? "Saving..." : "Save Changes"}
                                   </Button>
                                 </DialogFooter>
                               </DialogContent>
                             </Dialog>
-                            <Button size="sm" variant="ghost" className="text-red-500 hover:text-red-700 hover:bg-red-50">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                              onClick={() => deleteInventoryItem(item)}
+                            >
                               <Trash2 className="w-4 h-4" />
                             </Button>
                           </div>
@@ -520,7 +633,7 @@ export function InventoryManagement() {
 
                       {/* Expanded Row - Batch Details */}
                       {isExpanded && (
-                        <TableRow key={`${item.id}-expanded`} className="bg-muted/30">
+                        <TableRow className="bg-muted/30">
                           <TableCell colSpan={8} className="p-0">
                             <div className="p-4 space-y-2">
                               <p className="text-sm font-semibold text-muted-foreground mb-3">Batch Details:</p>
@@ -555,7 +668,7 @@ export function InventoryManagement() {
                           </TableCell>
                         </TableRow>
                       )}
-                    </>
+                    </Fragment>
                   );
                 })}
               </TableBody>

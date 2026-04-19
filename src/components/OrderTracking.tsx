@@ -1,10 +1,33 @@
-import React, { useEffect, useState } from "react";
-import { ref, onValue } from "firebase/database";
+import React, { useEffect, useRef, useState } from "react";
+import { ref, onValue, update } from "firebase/database";
 import { db } from "../config/firebase";
 import { useAuthStore } from "../store/authStore";
-import { Package, Clock, CheckCircle, Flame, MapPin } from "lucide-react";
+import { Package, CheckCircle, Flame, MapPin, Upload, ImageIcon, Search, Calendar } from "lucide-react";
+import { toast } from "sonner";
 
-type OrderStatus = "pending" | "confirmed" | "baking" | "ready" | "completed" | "declined";
+const compressImage = (dataUrl: string): Promise<string> =>
+  new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 1200;
+      const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", 0.82));
+    };
+    img.src = dataUrl;
+  });
+
+const parseValidDate = (value?: string) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+type OrderStatus = "pending" | "confirmed" | "baking" | "quality_check" | "ready" | "completed" | "declined";
+type PaymentType = "downpayment" | "deposit" | "full";
 
 interface Order {
   orderId: string;
@@ -16,29 +39,38 @@ interface Order {
   rushFee: number;
   total: number;
   downpayment: number;
+  amountDue: number;
+  paymentType?: PaymentType;
   isRushOrder: boolean;
   pickupDate: string;
   pickupTime: string;
   status: OrderStatus;
   declineReason?: string;
   createdAt: string;
+  clearedByCustomer?: boolean;
+  remainingBalanceProof?: string;
+  remainingBalanceVerified?: boolean;
+  estimatedCompletion?: string;
+  internalNote?: string;
 }
 
 const STEPS: { key: OrderStatus; label: string; icon: React.ElementType; desc: string }[] = [
-  { key: "pending",   label: "Order Received",    icon: Package,     desc: "We've received your order and are reviewing it." },
-  { key: "confirmed", label: "Confirmed",          icon: CheckCircle, desc: "Your order is confirmed! Downpayment acknowledged." },
-  { key: "baking",    label: "Baking",             icon: Flame,       desc: "Your cake is in the oven — the magic is happening!" },
-  { key: "ready",     label: "Ready for Pickup",   icon: MapPin,      desc: "Your cake is ready! Please come pick it up." },
-  { key: "completed", label: "Completed",          icon: CheckCircle, desc: "Order complete. Thank you for choosing Cake with Joy! 🎂" },
+  { key: "pending",       label: "Order Received",    icon: Package,     desc: "We've received your order and are reviewing it." },
+  { key: "confirmed",     label: "Confirmed",          icon: CheckCircle, desc: "Your order is confirmed! Downpayment acknowledged." },
+  { key: "baking",        label: "Baking",             icon: Flame,       desc: "Your cake is in the oven — the magic is happening!" },
+  { key: "quality_check", label: "Quality Check",      icon: Search,      desc: "Almost there! Our team is doing a final quality check." },
+  { key: "ready",         label: "Ready for Pickup",   icon: MapPin,      desc: "Your cake is ready! Please come pick it up." },
+  { key: "completed",     label: "Completed",          icon: CheckCircle, desc: "Order complete. Thank you for choosing Cake with Joy! 🎂" },
 ];
 
 const STATUS_COLORS: Record<OrderStatus, { color: string; bg: string; border: string }> = {
-  pending:   { color: "#92400e", bg: "rgba(251,191,36,0.12)",  border: "rgba(251,191,36,0.35)" },
-  confirmed: { color: "#1d4ed8", bg: "rgba(59,130,246,0.12)",  border: "rgba(59,130,246,0.35)" },
-  baking:    { color: "#c2410c", bg: "rgba(234,88,12,0.12)",   border: "rgba(234,88,12,0.35)"  },
-  ready:     { color: "#15803d", bg: "rgba(34,197,94,0.12)",   border: "rgba(34,197,94,0.35)"  },
-  completed: { color: "#6d28d9", bg: "rgba(139,92,246,0.12)",  border: "rgba(139,92,246,0.35)" },
-  declined:  { color: "#b91c1c", bg: "rgba(239,68,68,0.1)",    border: "rgba(239,68,68,0.35)"  },
+  pending:       { color: "#92400e", bg: "rgba(251,191,36,0.12)",  border: "rgba(251,191,36,0.35)" },
+  confirmed:     { color: "#1d4ed8", bg: "rgba(59,130,246,0.12)",  border: "rgba(59,130,246,0.35)" },
+  baking:        { color: "#c2410c", bg: "rgba(234,88,12,0.12)",   border: "rgba(234,88,12,0.35)"  },
+  quality_check: { color: "#6d28d9", bg: "rgba(124,58,237,0.10)",  border: "rgba(124,58,237,0.35)" },
+  ready:         { color: "#15803d", bg: "rgba(34,197,94,0.12)",   border: "rgba(34,197,94,0.35)"  },
+  completed:     { color: "#6d28d9", bg: "rgba(139,92,246,0.12)",  border: "rgba(139,92,246,0.35)" },
+  declined:      { color: "#b91c1c", bg: "rgba(239,68,68,0.1)",    border: "rgba(239,68,68,0.35)"  },
 };
 
 function getStepIndex(status: OrderStatus): number {
@@ -51,12 +83,60 @@ function getProgress(status: OrderStatus): number {
   return Math.round(((idx + 1) / STEPS.length) * 100);
 }
 
-function OrderCard({ order }: { order: Order }) {
+function normalizePaymentType(order: Order): PaymentType {
+  if (order.paymentType === "full") return "full";
+  if (order.paymentType === "deposit") return "deposit";
+  if (order.paymentType === "downpayment") return "downpayment";
+  if (order.amountDue >= order.total && order.total > 0) return "full";
+  return "downpayment";
+}
+
+function getRemainingBalance(order: Order): number {
+  const paymentType = normalizePaymentType(order);
+  if (paymentType === "full") return 0;
+  const inferredDownpayment = order.downpayment > 0 ? order.downpayment : order.amountDue;
+  return Math.max(order.total - inferredDownpayment, 0);
+}
+
+function OrderCard({ order, onClear }: { order: Order; onClear?: () => void }) {
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [balanceProof, setBalanceProof] = useState("");
+  const [uploadingBalance, setUploadingBalance] = useState(false);
+
+  const paymentType = normalizePaymentType(order);
+  const remainingBalance = getRemainingBalance(order);
+  const needsRemainingPayment =
+    order.status === "ready" &&
+    paymentType !== "full" &&
+    !order.remainingBalanceProof;
+
+  const awaitingVerification =
+    order.status === "ready" &&
+    paymentType !== "full" &&
+    !!order.remainingBalanceProof &&
+    !order.remainingBalanceVerified;
+
+  const handleBalanceUpload = async () => {
+    if (!balanceProof) return;
+    setUploadingBalance(true);
+    try {
+      const compressed = await compressImage(balanceProof);
+      await update(ref(db, `allOrders/${order.orderId}`), { remainingBalanceProof: compressed });
+      setBalanceProof("");
+    } catch (e) {
+      console.error("Failed to upload balance proof", e);
+    } finally {
+      setUploadingBalance(false);
+    }
+  };
+
   const isDeclined = order.status === "declined";
+  const isClearable = order.status === "completed" || order.status === "declined";
   const stepIdx = isDeclined ? -1 : getStepIndex(order.status);
   const progress = isDeclined ? 0 : getProgress(order.status);
   const sc = STATUS_COLORS[order.status];
   const currentStep = STEPS[stepIdx] ?? null;
+  const estimatedCompletionDate = parseValidDate(order.estimatedCompletion);
 
   return (
     <div style={{
@@ -92,20 +172,77 @@ function OrderCard({ order }: { order: Order }) {
             Placed {new Date(order.createdAt).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}
           </p>
         </div>
-        <span style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "6px 14px",
-          borderRadius: 100,
-          fontSize: 12,
-          fontWeight: 700,
-          color: sc.color,
-          background: sc.bg,
-          border: `1px solid ${sc.border}`,
-        }}>
-          {isDeclined ? "❌ Declined" : currentStep?.label}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "6px 14px",
+            borderRadius: 100,
+            fontSize: 12,
+            fontWeight: 700,
+            color: sc.color,
+            background: sc.bg,
+            border: `1px solid ${sc.border}`,
+          }}>
+            {isDeclined ? "❌ Declined" : currentStep?.label}
+          </span>
+          {isClearable && !confirmClear && (
+            <button
+              onClick={() => setConfirmClear(true)}
+              style={{
+                background: "transparent",
+                border: "1px solid rgba(139,111,132,0.3)",
+                borderRadius: 100,
+                padding: "5px 13px",
+                fontSize: 12,
+                fontWeight: 600,
+                color: "#8b6f84",
+                cursor: "pointer",
+                fontFamily: "system-ui, sans-serif",
+              }}
+            >
+              Clear
+            </button>
+          )}
+          {isClearable && confirmClear && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 12, color: "#8b6f84", fontFamily: "system-ui, sans-serif" }}>Remove this order?</span>
+              <button
+                onClick={() => { onClear?.(); setConfirmClear(false); }}
+                style={{
+                  background: "#b91c1c",
+                  border: "none",
+                  borderRadius: 100,
+                  padding: "5px 13px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: "#fff",
+                  cursor: "pointer",
+                  fontFamily: "system-ui, sans-serif",
+                }}
+              >
+                Yes, clear
+              </button>
+              <button
+                onClick={() => setConfirmClear(false)}
+                style={{
+                  background: "transparent",
+                  border: "1px solid rgba(139,111,132,0.3)",
+                  borderRadius: 100,
+                  padding: "5px 13px",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "#8b6f84",
+                  cursor: "pointer",
+                  fontFamily: "system-ui, sans-serif",
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div style={{ padding: "20px 24px" }}>
@@ -211,7 +348,7 @@ function OrderCard({ order }: { order: Order }) {
               border: `1px solid ${sc.border}`,
               borderRadius: 12,
               padding: "12px 16px",
-              marginBottom: 20,
+              marginBottom: estimatedCompletionDate ? 12 : 20,
               fontSize: 13,
               color: sc.color,
               fontWeight: 500,
@@ -219,7 +356,127 @@ function OrderCard({ order }: { order: Order }) {
             }}>
               {currentStep?.desc}
             </div>
+
+            {/* Estimated completion date */}
+            {estimatedCompletionDate && order.status !== "completed" && (
+              <div style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                background: "rgba(199,125,179,0.07)",
+                border: "1px solid rgba(199,125,179,0.25)",
+                borderRadius: 10,
+                padding: "9px 14px",
+                marginBottom: 20,
+              }}>
+                <Calendar size={14} color="#c77db3" />
+                <span style={{ fontSize: 12, color: "#8b6f84", fontFamily: "system-ui, sans-serif" }}>
+                  Estimated ready by{" "}
+                  <strong style={{ color: "#4a2e42" }}>
+                    {estimatedCompletionDate.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}
+                  </strong>
+                </span>
+              </div>
+            )}
           </>
+        )}
+
+        {/* ── Remaining balance payment section ── */}
+        {needsRemainingPayment && (
+          <div style={{
+            background: "rgba(251,191,36,0.07)",
+            border: "1.5px solid rgba(251,191,36,0.45)",
+            borderRadius: 16,
+            padding: "20px",
+            marginBottom: 20,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+              <span style={{ fontSize: 22 }}>💳</span>
+              <div>
+                <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#92400e", fontFamily: "system-ui, sans-serif" }}>
+                  Remaining Balance Due
+                </p>
+                <p style={{ margin: "2px 0 0", fontSize: 11, color: "#78350f", fontFamily: "system-ui, sans-serif" }}>
+                  Please pay before picking up your order
+                </p>
+              </div>
+              <span style={{ marginLeft: "auto", fontSize: 22, fontWeight: 800, color: "#92400e", fontFamily: "system-ui, sans-serif" }}>
+                ₱{remainingBalance.toLocaleString()}
+              </span>
+            </div>
+
+            {/* Upload area */}
+            <div style={{ background: "#fff", borderRadius: 12, border: "1.5px dashed rgba(251,191,36,0.5)", padding: "14px", marginBottom: 10 }}>
+              {balanceProof ? (
+                <div style={{ textAlign: "center" }}>
+                  <img src={balanceProof} alt="proof" style={{ maxHeight: 140, borderRadius: 8, objectFit: "contain", marginBottom: 8 }} />
+                  <button
+                    onClick={() => setBalanceProof("")}
+                    style={{ fontSize: 11, color: "#b91c1c", background: "none", border: "none", cursor: "pointer", fontFamily: "system-ui, sans-serif" }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                  <ImageIcon size={24} color="#c4a458" />
+                  <span style={{ fontSize: 12, color: "#92400e", fontWeight: 600, fontFamily: "system-ui, sans-serif" }}>
+                    Upload payment screenshot
+                  </span>
+                  <span style={{ fontSize: 11, color: "#8b6f84", fontFamily: "system-ui, sans-serif" }}>GCash, bank transfer, etc.</span>
+                  <input
+                    type="file" accept="image/*" style={{ display: "none" }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onloadend = () => setBalanceProof(reader.result as string);
+                      reader.readAsDataURL(file);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+
+            <button
+              onClick={handleBalanceUpload}
+              disabled={!balanceProof || uploadingBalance}
+              style={{
+                width: "100%", padding: "11px 0", borderRadius: 12, border: "none",
+                background: !balanceProof || uploadingBalance ? "rgba(251,191,36,0.3)" : "linear-gradient(135deg,#f59e0b,#d97706)",
+                color: "#fff", fontSize: 13, fontWeight: 700,
+                cursor: !balanceProof || uploadingBalance ? "not-allowed" : "pointer",
+                fontFamily: "system-ui, sans-serif",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
+              }}
+            >
+              <Upload size={14} /> {uploadingBalance ? "Submitting…" : "Submit Payment Proof"}
+            </button>
+          </div>
+        )}
+
+        {awaitingVerification && (
+          <div style={{
+            background: "rgba(59,130,246,0.07)",
+            border: "1.5px solid rgba(59,130,246,0.3)",
+            borderRadius: 16,
+            padding: "16px 20px",
+            marginBottom: 20,
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+          }}>
+            <span style={{ fontSize: 22 }}>🕐</span>
+            <div>
+              <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#1d4ed8", fontFamily: "system-ui, sans-serif" }}>
+                Payment proof submitted
+              </p>
+              <p style={{ margin: "3px 0 0", fontSize: 12, color: "#1e40af", fontFamily: "system-ui, sans-serif" }}>
+                We're verifying your remaining balance of ₱{remainingBalance.toLocaleString()}. We'll update your order shortly.
+              </p>
+            </div>
+          </div>
         )}
 
         {/* Items + totals */}
@@ -258,15 +515,30 @@ function OrderCard({ order }: { order: Order }) {
                 🕐 {order.pickupTime}
               </div>
               <div style={{ borderTop: "1px solid rgba(216,159,200,0.2)", paddingTop: 8 }}>
-                <div style={{ fontSize: 12, color: "#c77db3", fontWeight: 700, fontFamily: "system-ui, sans-serif" }}>
-                  Downpayment Due
-                </div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: "#c77db3", fontFamily: "system-ui, sans-serif" }}>
-                  ₱{order.downpayment.toLocaleString()}
-                </div>
-                <div style={{ fontSize: 11, color: "#8b6f84", fontFamily: "system-ui, sans-serif" }}>
-                  50% of total
-                </div>
+                {paymentType === "full" ? (
+                  <>
+                    <div style={{ fontSize: 12, color: "#15803d", fontWeight: 700, fontFamily: "system-ui, sans-serif" }}>
+                      ✅ Fully Paid
+                    </div>
+                    <div style={{ fontSize: 11, color: "#8b6f84", fontFamily: "system-ui, sans-serif", marginTop: 2 }}>
+                      No remaining balance
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 12, color: "#c77db3", fontWeight: 700, fontFamily: "system-ui, sans-serif" }}>
+                      {order.remainingBalanceVerified ? "✅ Balance Paid" : "Remaining Balance"}
+                    </div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: order.remainingBalanceVerified ? "#15803d" : "#c77db3", fontFamily: "system-ui, sans-serif" }}>
+                      {order.remainingBalanceVerified ? "Paid" : `₱${remainingBalance.toLocaleString()}`}
+                    </div>
+                    {!order.remainingBalanceVerified && (
+                      <div style={{ fontSize: 11, color: "#8b6f84", fontFamily: "system-ui, sans-serif" }}>
+                        Due on pickup
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -276,15 +548,27 @@ function OrderCard({ order }: { order: Order }) {
   );
 }
 
+const STATUS_TOAST: Partial<Record<OrderStatus, { message: string; emoji: string }>> = {
+  confirmed:     { emoji: "✅", message: "Your order has been confirmed!" },
+  baking:        { emoji: "🔥", message: "Your cake is now being baked!" },
+  quality_check: { emoji: "🔍", message: "Your cake is undergoing a quality check." },
+  ready:         { emoji: "🎂", message: "Your cake is ready for pickup!" },
+  completed:     { emoji: "🎉", message: "Order complete — thank you!" },
+  declined:      { emoji: "❌", message: "Your order has been declined." },
+};
+
 export function OrderTracking() {
   const user = useAuthStore((s) => s.user);
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const prevStatusMap = useRef<Record<string, OrderStatus>>({});
+
+  const clearOrder = async (orderId: string) => {
+    await update(ref(db, `allOrders/${orderId}`), { clearedByCustomer: true });
+  };
 
   useEffect(() => {
     if (!user) return;
-    // Read from allOrders (single source of truth) and filter by this customer's UID
-    // This ensures admin status updates are reflected in real time
     const ordersRef = ref(db, "allOrders");
     const unsub = onValue(ordersRef, (snapshot) => {
       const data = snapshot.val();
@@ -298,8 +582,30 @@ export function OrderTracking() {
           orderId: key,
           ...(val as Omit<Order, "orderId">),
         }))
-        .filter((o) => o.customerId === user.uid);
+        .filter((o) => o.customerId === user.uid && !o.clearedByCustomer);
       list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+      // Fire toast notifications for status changes (skip on first load)
+      const isFirstLoad = Object.keys(prevStatusMap.current).length === 0;
+      if (!isFirstLoad) {
+        list.forEach((order) => {
+          const prev = prevStatusMap.current[order.orderId];
+          if (prev && prev !== order.status) {
+            const t = STATUS_TOAST[order.status];
+            if (t) {
+              toast(t.message, {
+                description: `Order ${order.orderId.slice(0, 10)}`,
+                icon: t.emoji,
+                duration: 6000,
+              });
+            }
+          }
+        });
+      }
+
+      // Update status map
+      prevStatusMap.current = Object.fromEntries(list.map((o) => [o.orderId, o.status]));
+
       setOrders(list);
       setLoading(false);
     });
@@ -362,7 +668,7 @@ export function OrderTracking() {
                 </p>
                 {orders
                   .filter((o) => o.status === "declined")
-                  .map((order) => <OrderCard key={order.orderId} order={order} />)}
+                  .map((order) => <OrderCard key={order.orderId} order={order} onClear={() => clearOrder(order.orderId)} />)}
               </div>
             )}
 
@@ -374,7 +680,7 @@ export function OrderTracking() {
                 </p>
                 {orders
                   .filter((o) => o.status === "completed")
-                  .map((order) => <OrderCard key={order.orderId} order={order} />)}
+                  .map((order) => <OrderCard key={order.orderId} order={order} onClear={() => clearOrder(order.orderId)} />)}
               </div>
             )}
           </>

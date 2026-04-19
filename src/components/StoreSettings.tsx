@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ref, onValue, set } from "firebase/database";
 import { db } from "../config/firebase";
-import { Check, Star } from "lucide-react";
+import { Check, Star, Upload, X } from "lucide-react";
 
 type BannerType = "info" | "warning" | "festive";
 
@@ -22,6 +22,21 @@ const EXAMPLES = [
 ];
 
 const MAX_FEATURED = 10;
+
+const normalizeBanner = (value: unknown): Banner => {
+  const raw = (value ?? {}) as Partial<Banner>;
+  const message = typeof raw.message === "string" ? raw.message : "";
+  const type: BannerType =
+    raw.type === "warning" || raw.type === "festive" || raw.type === "info"
+      ? raw.type
+      : "info";
+
+  return {
+    message,
+    type,
+    active: Boolean(raw.active) && message.trim().length > 0,
+  };
+};
 
 const s: Record<string, React.CSSProperties> = {
   root:       { minHeight: "100vh", background: "#F4E9F2", fontFamily: "system-ui, sans-serif", padding: "32px 24px 64px" },
@@ -56,6 +71,16 @@ export function StoreSettings() {
   const [featuredSaving, setFeaturedSaving] = useState(false);
   const [featuredSaved, setFeaturedSaved] = useState(false);
 
+  // Payment QR state
+  const [gcashQR, setGcashQR] = useState<string>("");
+  const [bdoQR, setBdoQR] = useState<string>("");
+  const [gcashNumber, setGcashNumber] = useState<string>("");
+  const [bdoAccount, setBdoAccount] = useState<string>("");
+  const [qrSaving, setQrSaving] = useState(false);
+  const [qrSaved, setQrSaved] = useState(false);
+  const gcashInputRef = useRef<HTMLInputElement>(null);
+  const bdoInputRef = useRef<HTMLInputElement>(null);
+
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -63,7 +88,7 @@ export function StoreSettings() {
     const checkDone = () => { if (bannerLoaded && menuLoaded && featuredLoaded) setLoading(false); };
 
     const u1 = onValue(ref(db, "announcementBanner"), (snap) => {
-      if (snap.val()) setBanner(snap.val() as Banner);
+      setBanner(normalizeBanner(snap.val()));
       bannerLoaded = true; checkDone();
     });
     const u2 = onValue(ref(db, "menuItems"), (snap) => {
@@ -81,16 +106,30 @@ export function StoreSettings() {
       featuredLoaded = true; checkDone();
     });
 
-    return () => { u1(); u2(); u3(); };
+    // QR codes load independently — don't block the page on them
+    const u4 = onValue(ref(db, "paymentQR"), (snap) => {
+      const data = snap.val() ?? {};
+      setGcashQR(data.gcashQR ?? "");
+      setBdoQR(data.bdoQR ?? "");
+      setGcashNumber(data.gcashNumber ?? "");
+      setBdoAccount(data.bdoAccount ?? "");
+    });
+
+    return () => { u1(); u2(); u3(); u4(); };
   }, []);
 
   // Banner actions
   const saveBanner = async () => {
     setBannerSaving(true);
+    // If message is empty, force active off so it never shows a blank banner
+    const payload = { ...banner, active: banner.message.trim() ? banner.active : false };
     try {
-      await set(ref(db, "announcementBanner"), banner);
+      await set(ref(db, "announcementBanner"), payload);
+      setBanner(payload);
       setBannerSaved(true);
       setTimeout(() => setBannerSaved(false), 2500);
+    } catch {
+      alert("Failed to save banner. Check your connection and try again.");
     } finally { setBannerSaving(false); }
   };
 
@@ -113,6 +152,48 @@ export function StoreSettings() {
       setFeaturedSaved(true);
       setTimeout(() => setFeaturedSaved(false), 2500);
     } finally { setFeaturedSaving(false); }
+  };
+
+  const compressImage = (dataUrl: string, maxSize = 600): Promise<string> =>
+    new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width * scale;
+        canvas.height = img.height * scale;
+        canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.75));
+      };
+      img.src = dataUrl;
+    });
+
+  const saveQR = async () => {
+    setQrSaving(true);
+    try {
+      const [compressedGcash, compressedBdo] = await Promise.all([
+        gcashQR ? compressImage(gcashQR) : Promise.resolve(""),
+        bdoQR   ? compressImage(bdoQR)   : Promise.resolve(""),
+      ]);
+      await set(ref(db, "paymentQR"), {
+        gcashQR: compressedGcash,
+        bdoQR: compressedBdo,
+        gcashNumber,
+        bdoAccount,
+      });
+      setGcashQR(compressedGcash);
+      setBdoQR(compressedBdo);
+      setQrSaved(true);
+      setTimeout(() => setQrSaved(false), 2500);
+    } catch (e: any) {
+      alert("Failed to save QR codes: " + (e?.message ?? "Unknown error"));
+    } finally { setQrSaving(false); }
+  };
+
+  const readImageFile = (file: File, setter: (v: string) => void) => {
+    const reader = new FileReader();
+    reader.onloadend = () => setter(reader.result as string);
+    reader.readAsDataURL(file);
   };
 
   const currentType = BANNER_TYPES.find((t) => t.id === banner.type)!;
@@ -270,6 +351,64 @@ export function StoreSettings() {
 
               <button style={{ ...s.primaryBtn, opacity: featuredSaving ? 0.7 : 1 }} onClick={saveFeatured} disabled={featuredSaving}>
                 {featuredSaved ? <><Check size={15} /> Saved!</> : featuredSaving ? "Saving…" : <><Check size={15} /> Save Featured Cakes</>}
+              </button>
+            </div>
+
+            {/* ── Payment QR Codes ── */}
+            <div style={{ ...s.card, marginTop: 20 }}>
+              <p style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 700, color: "#4a2e42" }}>💳 Payment QR Codes</p>
+              <p style={{ margin: "0 0 24px", fontSize: 13, color: "#8b6f84" }}>Upload official GCash and BDO QR codes shown to customers at checkout.</p>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                {/* GCash */}
+                {[
+                  { label: "GCash", color: "#1d4ed8", bg: "rgba(59,130,246,0.06)", border: "rgba(59,130,246,0.3)", qr: gcashQR, setQr: setGcashQR, inputRef: gcashInputRef, account: gcashNumber, setAccount: setGcashNumber, placeholder: "09XX XXX XXXX", accountLabel: "GCash Number" },
+                  { label: "BDO Bank Transfer", color: "#c2410c", bg: "rgba(234,88,12,0.06)", border: "rgba(234,88,12,0.3)", qr: bdoQR, setQr: setBdoQR, inputRef: bdoInputRef, account: bdoAccount, setAccount: setBdoAccount, placeholder: "0123 4567 8901", accountLabel: "Account Number" },
+                ].map(({ label, color, bg, border, qr, setQr, inputRef, account, setAccount, placeholder, accountLabel }) => (
+                  <div key={label} style={{ border: `1.5px solid ${border}`, borderRadius: 16, padding: "16px", background: bg }}>
+                    <p style={{ margin: "0 0 12px", fontWeight: 700, fontSize: 13, color }}>{label}</p>
+
+                    {/* QR upload area */}
+                    <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }}
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) readImageFile(f, setQr); e.target.value = ""; }}
+                    />
+                    <div
+                      onClick={() => inputRef.current?.click()}
+                      style={{ cursor: "pointer", borderRadius: 12, overflow: "hidden", border: `1.5px dashed ${border}`, background: "#fff", marginBottom: 12, minHeight: 140, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}
+                    >
+                      {qr ? (
+                        <>
+                          <img src={qr} alt={`${label} QR`} style={{ width: "100%", maxHeight: 200, objectFit: "contain", display: "block" }} />
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setQr(""); }}
+                            style={{ position: "absolute", top: 6, right: 6, width: 24, height: 24, borderRadius: "50%", background: "rgba(0,0,0,0.5)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+                          >
+                            <X size={12} color="#fff" />
+                          </button>
+                        </>
+                      ) : (
+                        <div style={{ textAlign: "center", padding: "20px 12px" }}>
+                          <Upload size={22} color={color} style={{ marginBottom: 8 }} />
+                          <p style={{ margin: 0, fontSize: 12, color, fontWeight: 600 }}>Upload QR Image</p>
+                          <p style={{ margin: "4px 0 0", fontSize: 11, color: "#8b6f84" }}>PNG or JPG</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Account number */}
+                    <label style={s.label}>{accountLabel}</label>
+                    <input
+                      style={{ ...s.input, borderColor: border }}
+                      value={account}
+                      onChange={(e) => setAccount(e.target.value)}
+                      placeholder={placeholder}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <button style={{ ...s.primaryBtn, marginTop: 20, opacity: qrSaving ? 0.7 : 1 }} onClick={saveQR} disabled={qrSaving}>
+                {qrSaved ? <><Check size={15} /> Saved!</> : qrSaving ? "Saving…" : <><Check size={15} /> Save Payment QR Codes</>}
               </button>
             </div>
           </>

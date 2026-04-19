@@ -51,7 +51,7 @@ export const DEFAULT_CAKES: Omit<ReadyMadeCake, "id">[] = [
   { name: "Holiday Special", description: "Festive cake for the holiday season", image: "https://images.unsplash.com/photo-1481391243133-f96216dcb5d2?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxjaHJpc3RtYXMlMjBjYWtlJTIwZmVzdGl2ZXxlbnwxfHx8fDE3NzA1NjcwMDZ8MA&ixlib=rb-4.1.0&q=80&w=1080", flavor: "Red Velvet", size: '8"x6"', price: 2500, available: true, category: "Holiday" },
 ];
 
-export function ReadyMadeCakes({ initialCategory }: { initialCategory?: string }) {
+export function ReadyMadeCakes({ initialCategory, isGuest = false, onSignIn }: { initialCategory?: string; isGuest?: boolean; onSignIn?: () => void }) {
   const [cakes, setCakes] = useState<ReadyMadeCake[]>([]);
   const [loadingMenu, setLoadingMenu] = useState(true);
   const [selectedCake, setSelectedCake] = useState<ReadyMadeCake | null>(null);
@@ -60,22 +60,60 @@ export function ReadyMadeCakes({ initialCategory }: { initialCategory?: string }
   const [discountType, setDiscountType] = useState<DiscountType>("none");
 
   useEffect(() => {
-    const unsub = onValue(ref(db, "menuItems"), (snapshot) => {
-      const data = snapshot.val();
-      if (!data) { setCakes([]); setLoadingMenu(false); return; }
-      const list: ReadyMadeCake[] = Object.entries(data).map(([key, val]: [string, any]) => ({
-        id: key,
-        ...(val as Omit<ReadyMadeCake, "id">),
-      })).filter((c) => c.available); // customers only see available items
-      setCakes(list);
-      setLoadingMenu(false);
-    });
+    const defaultCakes: ReadyMadeCake[] = DEFAULT_CAKES.map((cake, idx) => ({
+      id: `default-${idx}`,
+      ...cake,
+      available: true,
+    }));
+
+    const unsub = onValue(
+      ref(db, "menuItems"),
+      (snapshot) => {
+        const data = snapshot.val();
+        if (!data) {
+          setCakes(defaultCakes);
+          setLoadingMenu(false);
+          return;
+        }
+        const list: ReadyMadeCake[] = Object.entries(data).map(([key, val]: [string, any]) => ({
+          id: key,
+          ...(val as Omit<ReadyMadeCake, "id">),
+        })).filter((c) => c.available); // customers only see available items
+
+        if (list.length === 0) {
+          setCakes(defaultCakes);
+        } else {
+          setCakes(list);
+        }
+        setLoadingMenu(false);
+      },
+      // Permission denied (unauthenticated guest) — fall back to default cakes
+      () => {
+        setCakes(defaultCakes);
+        setLoadingMenu(false);
+      }
+    );
     return () => unsub();
   }, []);
   const [idPhotoFile, setIdPhotoFile] = useState<File | null>(null);
   const [idHoldingPhotoFile, setIdHoldingPhotoFile] = useState<File | null>(null);
   const [showQRPayment, setShowQRPayment] = useState(false);
-  const [paymentType, setPaymentType] = useState<"deposit" | "full">("deposit"); // New state for payment type
+  const [paymentType, setPaymentType] = useState<"deposit" | "full">("deposit");
+  const [gcashQR, setGcashQR] = useState("");
+  const [bdoQR, setBdoQR] = useState("");
+  const [gcashNumber, setGcashNumber] = useState("");
+  const [bdoAccount, setBdoAccount] = useState("");
+
+  useEffect(() => {
+    const unsub = onValue(ref(db, "paymentQR"), (snap) => {
+      const data = snap.val() ?? {};
+      setGcashQR(data.gcashQR ?? "");
+      setBdoQR(data.bdoQR ?? "");
+      setGcashNumber(data.gcashNumber ?? "");
+      setBdoAccount(data.bdoAccount ?? "");
+    });
+    return () => unsub();
+  }, []);
 
   const calculatePrice = () => {
     if (!selectedCake) return 0;
@@ -111,7 +149,7 @@ export function ReadyMadeCakes({ initialCategory }: { initialCategory?: string }
                 Our Collection
               </p>
               <h1 style={{ fontSize: 30, fontWeight: 400, color: "#4a2e42", margin: 0, fontFamily: "Georgia, serif", lineHeight: 1.1 }}>
-                Cake Menu
+                Archives
               </h1>
               <p style={{ fontSize: 13, color: "#8b6f84", marginTop: 6, marginBottom: 0 }}>
                 Handcrafted for every occasion — pick your favorite or customize your own.
@@ -351,8 +389,8 @@ export function ReadyMadeCakes({ initialCategory }: { initialCategory?: string }
                   </div>
                 </div>
 
-                {/* Discount */}
-                <div>
+                {/* Discount — hidden for guests */}
+                {!isGuest && <div>
                   <p style={{ margin: "0 0 10px", fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8b6f84" }}>Discount</p>
                   <div style={{ display: "flex", gap: 8 }}>
                     {([["none", "No Discount"], ["senior", "Senior (20%)"], ["pwd", "PWD (20%)"]] as [DiscountType, string][]).map(([val, label]) => (
@@ -389,7 +427,7 @@ export function ReadyMadeCakes({ initialCategory }: { initialCategory?: string }
                       </div>
                     </div>
                   )}
-                </div>
+                </div>}
 
                 {/* Pricing */}
                 <div style={{ borderTop: "1px solid rgba(216,159,200,0.2)", paddingTop: 16 }}>
@@ -416,6 +454,7 @@ export function ReadyMadeCakes({ initialCategory }: { initialCategory?: string }
                 {/* Actions */}
                 {(() => {
                   const discountProofRequired = discountType !== "none" && (!idPhotoFile || !idHoldingPhotoFile);
+                  const blocked = discountProofRequired;
                   return (
                     <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: "auto" }}>
                       {discountProofRequired && (
@@ -423,15 +462,29 @@ export function ReadyMadeCakes({ initialCategory }: { initialCategory?: string }
                           ⚠️ Please upload both ID photos to apply the discount.
                         </p>
                       )}
-                      <button
-                        onClick={discountProofRequired ? undefined : handleAddToCart}
-                        disabled={discountProofRequired}
-                        style={{ width: "100%", padding: "14px 0", background: "linear-gradient(135deg,#d89fc8,#c77db3)", color: "#fff", border: "none", borderRadius: 14, fontSize: 14, fontWeight: 600, cursor: discountProofRequired ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, boxShadow: "0 4px 20px rgba(199,125,179,0.4)", fontFamily: "system-ui, sans-serif", opacity: discountProofRequired ? 0.45 : 1 }}
-                        onMouseEnter={e => { if (!discountProofRequired) e.currentTarget.style.opacity = "0.9"; }}
-                        onMouseLeave={e => { if (!discountProofRequired) e.currentTarget.style.opacity = "1"; }}
-                      >
-                        <ShoppingCart size={16} /> Add to Cart
-                      </button>
+                      {isGuest ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <p style={{ margin: 0, fontSize: 12, color: "#8b6f84", textAlign: "center", fontFamily: "system-ui, sans-serif" }}>
+                            Sign in to add items to your cart and place orders.
+                          </p>
+                          <button
+                            onClick={onSignIn}
+                            style={{ width: "100%", padding: "14px 0", background: "linear-gradient(135deg,#d89fc8,#c77db3)", color: "#fff", border: "none", borderRadius: 14, fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, boxShadow: "0 4px 20px rgba(199,125,179,0.4)", fontFamily: "system-ui, sans-serif" }}
+                          >
+                            🔑 Sign In to Order
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={blocked ? undefined : handleAddToCart}
+                          disabled={blocked}
+                          style={{ width: "100%", padding: "14px 0", background: "linear-gradient(135deg,#d89fc8,#c77db3)", color: "#fff", border: "none", borderRadius: 14, fontSize: 14, fontWeight: 600, cursor: blocked ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, boxShadow: "0 4px 20px rgba(199,125,179,0.4)", fontFamily: "system-ui, sans-serif", opacity: blocked ? 0.45 : 1 }}
+                          onMouseEnter={e => { if (!blocked) e.currentTarget.style.opacity = "0.9"; }}
+                          onMouseLeave={e => { if (!blocked) e.currentTarget.style.opacity = "1"; }}
+                        >
+                          <ShoppingCart size={16} /> Add to Cart
+                        </button>
+                      )}
                     </div>
                   );
                 })()}
@@ -504,67 +557,41 @@ export function ReadyMadeCakes({ initialCategory }: { initialCategory?: string }
             </div>
 
             {/* GCash Payment */}
-            <div className="border-2 border-blue-200 dark:border-blue-800 rounded-lg p-4 bg-blue-50 dark:bg-blue-950/20">
-              <div className="text-center mb-3">
-                <p className="font-semibold text-blue-900 dark:text-blue-100 mb-1">GCash Payment</p>
-                <p className="text-xs text-blue-700 dark:text-blue-300">Scan with GCash App</p>
-              </div>
-              
-              {/* Mockup QR Code for GCash */}
-              <div className="bg-white p-4 rounded-lg mx-auto w-fit">
-                <div className="w-48 h-48 bg-gradient-to-br from-blue-100 to-blue-200 rounded-lg flex items-center justify-center border-4 border-blue-400">
-                  <div className="text-center">
-                    <div className="grid grid-cols-8 gap-1 mb-2">
-                      {Array.from({ length: 64 }).map((_, i) => (
-                        <div
-                          key={i}
-                          className={`w-2 h-2 ${
-                            Math.random() > 0.5 ? 'bg-blue-900' : 'bg-white'
-                          }`}
-                        />
-                      ))}
-                    </div>
-                    <p className="text-xs font-semibold text-blue-900">GCASH QR</p>
-                  </div>
+            <div className="border-2 border-blue-200 rounded-lg p-4 bg-blue-50">
+              <p className="font-semibold text-blue-900 mb-1">GCash Payment</p>
+              <p className="text-xs text-blue-700 mb-3">Scan with GCash App</p>
+              {gcashQR ? (
+                <div className="bg-white p-3 rounded-lg flex items-center justify-center mb-3">
+                  <img src={gcashQR} alt="GCash QR" style={{ width: 180, height: 180, objectFit: "contain", borderRadius: 8 }} />
                 </div>
-              </div>
-
-              <div className="mt-3 space-y-1 text-xs text-blue-900 dark:text-blue-100">
+              ) : (
+                <div className="bg-blue-100 rounded-lg p-4 text-center mb-3">
+                  <p className="text-xs text-blue-700">QR code not yet configured.</p>
+                </div>
+              )}
+              <div className="space-y-1 text-xs text-blue-900">
                 <p><span className="font-semibold">Account Name:</span> Cake with Joy</p>
-                <p><span className="font-semibold">Account Number:</span> 09XX XXX XXXX</p>
+                {gcashNumber && <p><span className="font-semibold">Number:</span> {gcashNumber}</p>}
                 <p><span className="font-semibold">Amount:</span> ₱{(paymentType === "deposit" ? (finalPrice * 0.5).toLocaleString() : finalPrice.toLocaleString())}</p>
               </div>
             </div>
 
             {/* BDO Payment */}
-            <div className="border-2 border-orange-200 dark:border-orange-800 rounded-lg p-4 bg-orange-50 dark:bg-orange-950/20">
-              <div className="text-center mb-3">
-                <p className="font-semibold text-orange-900 dark:text-orange-100 mb-1">BDO Bank Transfer</p>
-                <p className="text-xs text-orange-700 dark:text-orange-300">Scan with BDO App or use account details</p>
-              </div>
-              
-              {/* Mockup QR Code for BDO */}
-              <div className="bg-white p-4 rounded-lg mx-auto w-fit">
-                <div className="w-48 h-48 bg-gradient-to-br from-orange-100 to-orange-200 rounded-lg flex items-center justify-center border-4 border-orange-400">
-                  <div className="text-center">
-                    <div className="grid grid-cols-8 gap-1 mb-2">
-                      {Array.from({ length: 64 }).map((_, i) => (
-                        <div
-                          key={i}
-                          className={`w-2 h-2 ${
-                            Math.random() > 0.5 ? 'bg-orange-900' : 'bg-white'
-                          }`}
-                        />
-                      ))}
-                    </div>
-                    <p className="text-xs font-semibold text-orange-900">BDO QR</p>
-                  </div>
+            <div className="border-2 border-orange-200 rounded-lg p-4 bg-orange-50">
+              <p className="font-semibold text-orange-900 mb-1">BDO Bank Transfer</p>
+              <p className="text-xs text-orange-700 mb-3">Scan with BDO App or use account details</p>
+              {bdoQR ? (
+                <div className="bg-white p-3 rounded-lg flex items-center justify-center mb-3">
+                  <img src={bdoQR} alt="BDO QR" style={{ width: 180, height: 180, objectFit: "contain", borderRadius: 8 }} />
                 </div>
-              </div>
-
-              <div className="mt-3 space-y-1 text-xs text-orange-900 dark:text-orange-100">
+              ) : (
+                <div className="bg-orange-100 rounded-lg p-4 text-center mb-3">
+                  <p className="text-xs text-orange-700">QR code not yet configured.</p>
+                </div>
+              )}
+              <div className="space-y-1 text-xs text-orange-900">
                 <p><span className="font-semibold">Account Name:</span> Cake with Joy</p>
-                <p><span className="font-semibold">Account Number:</span> 0123 4567 8901</p>
+                {bdoAccount && <p><span className="font-semibold">Account Number:</span> {bdoAccount}</p>}
                 <p><span className="font-semibold">Amount:</span> ₱{(paymentType === "deposit" ? (finalPrice * 0.5).toLocaleString() : finalPrice.toLocaleString())}</p>
               </div>
             </div>

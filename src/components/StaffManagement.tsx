@@ -1,4 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { ref, onValue, set, update } from "firebase/database";
+import { db, firebaseConfig } from "../config/firebase";
+import { initializeApp, deleteApp } from "firebase/app";
+import { getAuth, createUserWithEmailAndPassword, updateProfile, sendPasswordResetEmail } from "firebase/auth";
+import type { FirebaseError } from "firebase/app";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -39,185 +44,212 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "./ui/alert-dialog";
-import { Search, Plus, Edit, Trash2, Users, Mail, Phone, Calendar } from "lucide-react";
+import { Search, Plus, Edit, Trash2, Users, Mail, Phone, Calendar, Loader2, Eye, EyeOff, UserX } from "lucide-react";
 
 interface StaffMember {
-  id: number;
+  uid: string;
   name: string;
   email: string;
   phone: string;
   role: string;
-  status: "active" | "inactive";
+  isActive: boolean;
   hireDate: string;
-  lastActive: string;
+  createdAt: string;
 }
 
+const ROLE_LABELS: Record<string, string> = {
+  production: "Production",
+  sales: "Sales",
+  baker: "Baker",
+};
+
+const getRoleBadgeColor = (role: string) => {
+  const colors: Record<string, string> = {
+    production: "bg-orange-100 text-orange-800",
+    sales: "bg-green-100 text-green-800",
+    baker: "bg-amber-100 text-amber-800",
+  };
+  return colors[role] || "bg-gray-100 text-gray-800";
+};
+
+const formatDate = (dateString: string) => {
+  if (!dateString) return "—";
+  const date = new Date(dateString);
+  return date.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+};
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") {
+    return error.message;
+  }
+  return fallback;
+};
+
 export function StaffManagement() {
+  const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null);
   const [roleFilter, setRoleFilter] = useState("all");
 
-  const [staffMembers, setStaffMembers] = useState<StaffMember[]>([
-    {
-      id: 1,
-      name: "Maria Santos",
-      email: "maria.santos@cakejoy.ph",
-      phone: "(02) 8123-4567",
-      role: "Baker",
-      status: "active",
-      hireDate: "2024-01-15",
-      lastActive: "Nov 11, 2025",
-    },
-    {
-      id: 2,
-      name: "Juan Dela Cruz",
-      email: "juan.delacruz@cakejoy.ph",
-      phone: "(02) 8234-5678",
-      role: "Baker",
-      status: "active",
-      hireDate: "2024-03-20",
-      lastActive: "Nov 11, 2025",
-    },
-    {
-      id: 3,
-      name: "Ana Reyes",
-      email: "ana.reyes@cakejoy.ph",
-      phone: "(02) 8345-6789",
-      role: "Customer Service",
-      status: "active",
-      hireDate: "2024-05-10",
-      lastActive: "Nov 11, 2025",
-    },
-    {
-      id: 4,
-      name: "Carlos Garcia",
-      email: "carlos.garcia@cakejoy.ph",
-      phone: "(02) 8456-7890",
-      role: "Decorator",
-      status: "active",
-      hireDate: "2024-02-28",
-      lastActive: "Nov 10, 2025",
-    },
-    {
-      id: 5,
-      name: "Elena Torres",
-      email: "elena.torres@cakejoy.ph",
-      phone: "(02) 8567-8901",
-      role: "Customer Service",
-      status: "active",
-      hireDate: "2024-06-15",
-      lastActive: "Nov 11, 2025",
-    },
-    {
-      id: 6,
-      name: "Roberto Cruz",
-      email: "roberto.cruz@cakejoy.ph",
-      phone: "(02) 8678-9012",
-      role: "Inventory Manager",
-      status: "active",
-      hireDate: "2024-04-05",
-      lastActive: "Nov 11, 2025",
-    },
-    {
-      id: 7,
-      name: "Lisa Martinez",
-      email: "lisa.martinez@cakejoy.ph",
-      phone: "(02) 8789-0123",
-      role: "Baker",
-      status: "inactive",
-      hireDate: "2023-11-20",
-      lastActive: "Oct 15, 2025",
-    },
-  ]);
+  // Add form
+  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [newStaff, setNewStaff] = useState({ name: "", email: "", password: "", phone: "", role: "", hireDate: "" });
 
-  const [newStaff, setNewStaff] = useState({
-    name: "",
-    email: "",
-    phone: "",
-    role: "",
-    hireDate: "",
+  // Edit form
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+  const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null);
+  const [deletingUid, setDeletingUid] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+
+  // Password reset
+  const [resetingPw, setResetingPw] = useState<string | null>(null);
+  const [resetPwMsg, setResetPwMsg] = useState<{ uid: string; msg: string; ok: boolean } | null>(null);
+
+  useEffect(() => {
+    setResetPwMsg(null);
+  }, [isEditOpen, selectedStaff]);
+
+  // Read staff from Firebase — users with role production/sales/staff
+  useEffect(() => {
+    const unsub = onValue(ref(db, "users"), (snap) => {
+      const data = snap.val();
+      if (!data) { setStaffMembers([]); setLoading(false); return; }
+      const list: StaffMember[] = Object.entries(data)
+        .map(([uid, val]) => ({ uid, ...(val as Omit<StaffMember, "uid">) }))
+        .filter((u) => ["production", "sales", "staff", "baker"].includes(u.role));
+      list.sort((a, b) => {
+        if ((a.isActive !== false) !== (b.isActive !== false)) {
+          return a.isActive === false ? 1 : -1;
+        }
+        return (a.name ?? "").localeCompare(b.name ?? "");
+      });
+      setStaffMembers(list);
+      setLoading(false);
+    }, () => { setStaffMembers([]); setLoading(false); });
+    return () => unsub();
+  }, []);
+
+  const activeCount = staffMembers.filter((s) => s.isActive !== false).length;
+
+  const filtered = staffMembers.filter((s) => {
+    const matchSearch =
+      s.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      s.email?.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchRole = roleFilter === "all" || s.role === roleFilter;
+    return matchSearch && matchRole;
   });
 
-  const filteredStaff = staffMembers.filter((staff) => {
-    const matchesSearch =
-      staff.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      staff.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      staff.role.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesRole = roleFilter === "all" || staff.role === roleFilter;
-    return matchesSearch && matchesRole;
-  });
+  // Create real Firebase Auth account using a secondary app instance
+  // so the admin session is not disrupted
+  const handleAddStaff = async () => {
+    setAdding(true);
+    setAddError("");
+    let secondaryApp;
+    try {
+      secondaryApp = initializeApp(firebaseConfig, `staff-create-${Date.now()}`);
+      const secondaryAuth = getAuth(secondaryApp);
+      const cred = await createUserWithEmailAndPassword(secondaryAuth, newStaff.email, newStaff.password);
+      await updateProfile(cred.user, { displayName: newStaff.name });
 
-  const activeStaffCount = staffMembers.filter((s) => s.status === "active").length;
+      // Write profile to Firebase DB
+      await set(ref(db, `users/${cred.user.uid}`), {
+        name: newStaff.name,
+        email: newStaff.email,
+        phone: newStaff.phone,
+        role: newStaff.role,
+        isActive: true,
+        hireDate: newStaff.hireDate,
+        createdAt: new Date().toISOString(),
+      });
 
-  const handleAddStaff = () => {
-    const staff: StaffMember = {
-      id: Math.max(...staffMembers.map((s) => s.id)) + 1,
-      name: newStaff.name,
-      email: newStaff.email,
-      phone: newStaff.phone,
-      role: newStaff.role,
-      status: "active",
-      hireDate: newStaff.hireDate,
-      lastActive: new Date().toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      }),
-    };
-    setStaffMembers([...staffMembers, staff]);
-    setNewStaff({ name: "", email: "", phone: "", role: "", hireDate: "" });
-    setIsAddModalOpen(false);
-  };
-
-  const handleDeleteStaff = (id: number) => {
-    setStaffMembers(staffMembers.filter((staff) => staff.id !== id));
-  };
-
-  const handleEditStaff = (staff: StaffMember) => {
-    setSelectedStaff(staff);
-    setIsEditModalOpen(true);
-  };
-
-  const handleUpdateStaff = () => {
-    if (selectedStaff) {
-      setStaffMembers(
-        staffMembers.map((staff) =>
-          staff.id === selectedStaff.id ? selectedStaff : staff
-        )
-      );
-      setIsEditModalOpen(false);
-      setSelectedStaff(null);
+      await secondaryAuth.signOut();
+      setNewStaff({ name: "", email: "", password: "", phone: "", role: "", hireDate: "" });
+      setIsAddOpen(false);
+    } catch (e: unknown) {
+      const error = e as FirebaseError;
+      const msg: Record<string, string> = {
+        "auth/email-already-in-use": "An account with this email already exists.",
+        "auth/invalid-email": "Invalid email address.",
+        "auth/weak-password": "Password must be at least 6 characters.",
+      };
+      setAddError(msg[error.code] ?? getErrorMessage(error, "Failed to create account."));
+    } finally {
+      if (secondaryApp) await deleteApp(secondaryApp).catch(() => {});
+      setAdding(false);
     }
   };
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
+  const handleResetPassword = async (staff: StaffMember) => {
+    if (!staff.email) return;
+    setResetingPw(staff.uid);
+    setResetPwMsg(null);
+    try {
+      await sendPasswordResetEmail(getAuth(), staff.email);
+      setResetPwMsg({ uid: staff.uid, msg: `Reset email sent to ${staff.email}`, ok: true });
+    } catch {
+      setResetPwMsg({ uid: staff.uid, msg: "Failed to send reset email.", ok: false });
+    } finally {
+      setResetingPw(null);
+    }
   };
 
-  const getRoleBadgeColor = (role: string) => {
-    const colors: Record<string, string> = {
-      Baker: "bg-blue-100 text-blue-800",
-      "Customer Service": "bg-green-100 text-green-800",
-      Decorator: "bg-purple-100 text-purple-800",
-      "Inventory Manager": "bg-orange-100 text-orange-800",
-    };
-    return colors[role] || "bg-gray-100 text-gray-800";
+  const handleUpdateStaff = async () => {
+    if (!selectedStaff) return;
+    setSaving(true);
+    setEditError("");
+    try {
+      await update(ref(db, `users/${selectedStaff.uid}`), {
+        name: selectedStaff.name,
+        phone: selectedStaff.phone,
+        role: selectedStaff.role,
+        isActive: selectedStaff.isActive,
+      });
+      setIsEditOpen(false);
+      setSelectedStaff(null);
+    } catch (e: unknown) {
+      setEditError(getErrorMessage(e, "Failed to save changes."));
+    } finally {
+      setSaving(false);
+    }
   };
+
+  // Deactivate instead of hard-delete (can't delete Firebase Auth from client)
+  const handleDeactivate = async (uid: string) => {
+    await update(ref(db, `users/${uid}`), { isActive: false });
+  };
+
+  const handleDeleteStaff = async (staff: StaffMember) => {
+    setDeletingUid(staff.uid);
+    setDeleteError("");
+    try {
+      await update(ref(db, `users/${staff.uid}`), { isActive: false });
+    } catch (e: unknown) {
+      setDeleteError(getErrorMessage(e, "Failed to disable staff member."));
+    } finally {
+      setDeletingUid(null);
+    }
+  };
+
+  const addValid = newStaff.name && newStaff.email && newStaff.password.length >= 6 && newStaff.phone && newStaff.role && newStaff.hireDate;
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="mb-6">
         <h1 className="mb-2">Staff Management</h1>
-        <p className="text-muted-foreground">
-          Manage bakery staff members, roles, and access
-        </p>
+        <p className="text-muted-foreground">Manage bakery staff accounts, roles, and access</p>
       </div>
 
       {/* Stats */}
@@ -231,25 +263,25 @@ export function StaffManagement() {
         <Card>
           <CardContent className="p-6">
             <p className="text-muted-foreground mb-1">Active Staff</p>
-            <h2 className="text-green-600">{activeStaffCount}</h2>
+            <h2 className="text-green-600">{activeCount}</h2>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-6">
             <p className="text-muted-foreground mb-1">Inactive Staff</p>
-            <h2 className="text-red-600">{staffMembers.length - activeStaffCount}</h2>
+            <h2 className="text-red-600">{staffMembers.length - activeCount}</h2>
           </CardContent>
         </Card>
       </div>
 
-      {/* Staff Table */}
+      {/* Table */}
       <Card>
         <CardHeader>
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <CardTitle>Staff Members</CardTitle>
             <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
               <div className="relative flex-1 sm:flex-initial">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
                   placeholder="Search staff..."
                   value={searchQuery}
@@ -258,356 +290,282 @@ export function StaffManagement() {
                 />
               </div>
               <Select value={roleFilter} onValueChange={setRoleFilter}>
-                <SelectTrigger className="w-full sm:w-48">
-                  <SelectValue placeholder="Filter by role" />
+                <SelectTrigger className="w-full sm:w-40">
+                  <SelectValue placeholder="All Roles" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Roles</SelectItem>
-                  <SelectItem value="Baker">Baker</SelectItem>
-                  <SelectItem value="Customer Service">Customer Service</SelectItem>
-                  <SelectItem value="Decorator">Decorator</SelectItem>
-                  <SelectItem value="Inventory Manager">Inventory Manager</SelectItem>
+                  <SelectItem value="production">Production</SelectItem>
+                  <SelectItem value="sales">Sales</SelectItem>
+                  <SelectItem value="baker">Baker</SelectItem>
                 </SelectContent>
               </Select>
-              <Dialog open={isAddModalOpen} onOpenChange={setIsAddModalOpen}>
+
+              {/* Add Staff Dialog */}
+              <Dialog open={isAddOpen} onOpenChange={(o) => { setIsAddOpen(o); setAddError(""); }}>
                 <DialogTrigger asChild>
                   <Button className="gap-2 bg-primary hover:bg-primary/90">
-                    <Plus className="w-4 h-4" />
-                    Add Staff
+                    <Plus className="w-4 h-4" /> Add Staff
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="max-w-lg">
                   <DialogHeader>
                     <DialogTitle>Add New Staff Member</DialogTitle>
-                    <DialogDescription>
-                      Add a new staff member to the bakery team
-                    </DialogDescription>
+                    <DialogDescription>Creates a login account and adds them to the system.</DialogDescription>
                   </DialogHeader>
                   <div className="space-y-4 py-4">
                     <div className="space-y-2">
-                      <Label htmlFor="staff-name">Full Name</Label>
-                      <Input
-                        id="staff-name"
-                        placeholder="e.g., Maria Santos"
-                        value={newStaff.name}
-                        onChange={(e) =>
-                          setNewStaff({ ...newStaff, name: e.target.value })
-                        }
-                      />
+                      <Label>Full Name</Label>
+                      <Input placeholder="e.g. Maria Santos" value={newStaff.name} onChange={(e) => setNewStaff({ ...newStaff, name: e.target.value })} />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="staff-email">Email</Label>
-                      <Input
-                        id="staff-email"
-                        type="email"
-                        placeholder="e.g., maria.santos@cakejoy.ph"
-                        value={newStaff.email}
-                        onChange={(e) =>
-                          setNewStaff({ ...newStaff, email: e.target.value })
-                        }
-                      />
+                      <Label>Email</Label>
+                      <Input type="email" placeholder="e.g. maria@cakewjoy.com" value={newStaff.email} onChange={(e) => setNewStaff({ ...newStaff, email: e.target.value })} />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="staff-phone">Phone Number</Label>
-                      <Input
-                        id="staff-phone"
-                        type="tel"
-                        placeholder="e.g., (02) 8123-4567"
-                        value={newStaff.phone}
-                        onChange={(e) =>
-                          setNewStaff({ ...newStaff, phone: e.target.value })
-                        }
-                      />
+                      <Label>Password</Label>
+                      <div className="relative">
+                        <Input
+                          type={showPassword ? "text" : "password"}
+                          placeholder="Min. 6 characters"
+                          value={newStaff.password}
+                          onChange={(e) => setNewStaff({ ...newStaff, password: e.target.value })}
+                          className="pr-10"
+                        />
+                        <button type="button" className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" onClick={() => setShowPassword(!showPassword)}>
+                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="staff-role">Role</Label>
-                      <Select
-                        value={newStaff.role}
-                        onValueChange={(value) =>
-                          setNewStaff({ ...newStaff, role: value })
-                        }
-                      >
-                        <SelectTrigger id="staff-role">
-                          <SelectValue placeholder="Select role" />
-                        </SelectTrigger>
+                      <Label>Phone Number</Label>
+                      <Input type="tel" placeholder="e.g. 09XX XXX XXXX" value={newStaff.phone} onChange={(e) => setNewStaff({ ...newStaff, phone: e.target.value })} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Role</Label>
+                      <Select value={newStaff.role} onValueChange={(v) => setNewStaff({ ...newStaff, role: v })}>
+                        <SelectTrigger><SelectValue placeholder="Select role" /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="Baker">Baker</SelectItem>
-                          <SelectItem value="Customer Service">
-                            Customer Service
-                          </SelectItem>
-                          <SelectItem value="Decorator">Decorator</SelectItem>
-                          <SelectItem value="Inventory Manager">
-                            Inventory Manager
-                          </SelectItem>
+                          <SelectItem value="production">Production</SelectItem>
+                          <SelectItem value="sales">Sales</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="staff-hire-date">Hire Date</Label>
-                      <Input
-                        id="staff-hire-date"
-                        type="date"
-                        value={newStaff.hireDate}
-                        onChange={(e) =>
-                          setNewStaff({ ...newStaff, hireDate: e.target.value })
-                        }
-                      />
+                      <Label>Hire Date</Label>
+                      <Input type="date" value={newStaff.hireDate} onChange={(e) => setNewStaff({ ...newStaff, hireDate: e.target.value })} />
                     </div>
+                    {addError && <p className="text-sm text-red-500 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{addError}</p>}
                   </div>
                   <DialogFooter>
-                    <Button variant="outline" onClick={() => setIsAddModalOpen(false)}>
-                      Cancel
-                    </Button>
-                    <Button
-                      className="bg-primary hover:bg-primary/90"
-                      onClick={handleAddStaff}
-                      disabled={
-                        !newStaff.name ||
-                        !newStaff.email ||
-                        !newStaff.phone ||
-                        !newStaff.role ||
-                        !newStaff.hireDate
-                      }
-                    >
-                      Add Staff Member
+                    <Button variant="outline" onClick={() => setIsAddOpen(false)}>Cancel</Button>
+                    <Button className="bg-primary hover:bg-primary/90" onClick={handleAddStaff} disabled={!addValid || adding}>
+                      {adding ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Creating…</> : "Create Account"}
                     </Button>
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
             </div>
           </div>
+          {deleteError && (
+            <p className="text-sm text-red-500 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mt-4">
+              {deleteError}
+            </p>
+          )}
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Phone</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Hire Date</TableHead>
-                  <TableHead>Last Active</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredStaff.map((staff) => (
-                  <TableRow key={staff.id}>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Users className="w-4 h-4 text-muted-foreground" />
-                        {staff.name}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2 text-muted-foreground">
-                        <Mail className="w-3 h-3" />
-                        <a
-                          href={`mailto:${staff.email}`}
-                          className="hover:text-primary transition-colors"
-                        >
-                          {staff.email}
-                        </a>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2 text-muted-foreground">
-                        <Phone className="w-3 h-3" />
-                        {staff.phone}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge className={getRoleBadgeColor(staff.role)}>
-                        {staff.role}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      {staff.status === "active" ? (
-                        <Badge className="bg-green-100 text-green-800">Active</Badge>
-                      ) : (
-                        <Badge className="bg-gray-100 text-gray-800">Inactive</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1 text-muted-foreground">
-                        <Calendar className="w-3 h-3" />
-                        {formatDate(staff.hireDate)}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {staff.lastActive}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <Dialog
-                          open={isEditModalOpen && selectedStaff?.id === staff.id}
-                          onOpenChange={setIsEditModalOpen}
-                        >
-                          <DialogTrigger asChild>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="gap-2"
-                              onClick={() => handleEditStaff(staff)}
-                            >
-                              <Edit className="w-3 h-3" />
-                              Edit
-                            </Button>
-                          </DialogTrigger>
-                          <DialogContent className="max-w-lg">
-                            <DialogHeader>
-                              <DialogTitle>Edit Staff Member</DialogTitle>
-                              <DialogDescription>
-                                Update staff member information
-                              </DialogDescription>
-                            </DialogHeader>
-                            <div className="space-y-4 py-4">
-                              <div className="space-y-2">
-                                <Label htmlFor="edit-staff-name">Full Name</Label>
-                                <Input
-                                  id="edit-staff-name"
-                                  value={selectedStaff?.name || ""}
-                                  onChange={(e) =>
-                                    setSelectedStaff(
-                                      selectedStaff
-                                        ? { ...selectedStaff, name: e.target.value }
-                                        : null
-                                    )
-                                  }
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor="edit-staff-email">Email</Label>
-                                <Input
-                                  id="edit-staff-email"
-                                  type="email"
-                                  value={selectedStaff?.email || ""}
-                                  onChange={(e) =>
-                                    setSelectedStaff(
-                                      selectedStaff
-                                        ? { ...selectedStaff, email: e.target.value }
-                                        : null
-                                    )
-                                  }
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor="edit-staff-phone">Phone Number</Label>
-                                <Input
-                                  id="edit-staff-phone"
-                                  value={selectedStaff?.phone || ""}
-                                  onChange={(e) =>
-                                    setSelectedStaff(
-                                      selectedStaff
-                                        ? { ...selectedStaff, phone: e.target.value }
-                                        : null
-                                    )
-                                  }
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor="edit-staff-role">Role</Label>
-                                <Select
-                                  value={selectedStaff?.role || ""}
-                                  onValueChange={(value) =>
-                                    setSelectedStaff(
-                                      selectedStaff
-                                        ? { ...selectedStaff, role: value }
-                                        : null
-                                    )
-                                  }
-                                >
-                                  <SelectTrigger id="edit-staff-role">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="Baker">Baker</SelectItem>
-                                    <SelectItem value="Customer Service">
-                                      Customer Service
-                                    </SelectItem>
-                                    <SelectItem value="Decorator">Decorator</SelectItem>
-                                    <SelectItem value="Inventory Manager">
-                                      Inventory Manager
-                                    </SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor="edit-staff-status">Status</Label>
-                                <Select
-                                  value={selectedStaff?.status || ""}
-                                  onValueChange={(value: "active" | "inactive") =>
-                                    setSelectedStaff(
-                                      selectedStaff
-                                        ? { ...selectedStaff, status: value }
-                                        : null
-                                    )
-                                  }
-                                >
-                                  <SelectTrigger id="edit-staff-status">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="active">Active</SelectItem>
-                                    <SelectItem value="inactive">Inactive</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                            </div>
-                            <DialogFooter>
-                              <Button
-                                variant="outline"
-                                onClick={() => setIsEditModalOpen(false)}
-                              >
-                                Cancel
-                              </Button>
-                              <Button
-                                className="bg-primary hover:bg-primary/90"
-                                onClick={handleUpdateStaff}
-                              >
-                                Save Changes
-                              </Button>
-                            </DialogFooter>
-                          </DialogContent>
-                        </Dialog>
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="text-red-500 hover:text-red-700 hover:bg-red-50"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Delete Staff Member</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Are you sure you want to delete {staff.name}? This action
-                                cannot be undone.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={() => handleDeleteStaff(staff.id)}
-                                className="bg-red-500 hover:bg-red-600"
-                              >
-                                Delete
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
-                    </TableCell>
+          {filtered.length === 0 ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
+              <p className="font-medium">{searchQuery || roleFilter !== "all" ? "No staff match your search" : "No staff accounts yet"}</p>
+              <p className="text-sm mt-1">{searchQuery || roleFilter !== "all" ? "Try a different filter" : "Click \"Add Staff\" to create the first account"}</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Phone</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Hire Date</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+                </TableHeader>
+                <TableBody>
+                  {filtered.map((staff) => (
+                    <TableRow key={staff.uid}>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Users className="w-4 h-4 text-muted-foreground" />
+                          {staff.name}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <Mail className="w-3 h-3" />
+                          <a href={`mailto:${staff.email}`} className="hover:text-primary transition-colors">{staff.email}</a>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <Phone className="w-3 h-3" />
+                          {staff.phone || "—"}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={getRoleBadgeColor(staff.role)}>
+                          {ROLE_LABELS[staff.role] ?? staff.role}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {staff.isActive !== false
+                          ? <Badge className="bg-green-100 text-green-800">Active</Badge>
+                          : <Badge className="bg-gray-100 text-gray-800">Inactive</Badge>}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1 text-muted-foreground">
+                          <Calendar className="w-3 h-3" />
+                          {formatDate(staff.hireDate)}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+
+                          {/* Edit Dialog */}
+                          <Dialog open={isEditOpen && selectedStaff?.uid === staff.uid} onOpenChange={(o) => { setIsEditOpen(o); setEditError(""); }}>
+                            <DialogTrigger asChild>
+                              <Button size="sm" variant="outline" className="gap-1" onClick={() => { setSelectedStaff(staff); setIsEditOpen(true); }}>
+                                <Edit className="w-3 h-3" /> Edit
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent className="max-w-lg">
+                              <DialogHeader>
+                                <DialogTitle>Edit Staff Member</DialogTitle>
+                                <DialogDescription>Update staff details and access role.</DialogDescription>
+                              </DialogHeader>
+                              <div className="space-y-4 py-4">
+                                <div className="space-y-2">
+                                  <Label>Full Name</Label>
+                                  <Input value={selectedStaff?.name || ""} onChange={(e) => setSelectedStaff(s => s ? { ...s, name: e.target.value } : s)} />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Phone Number</Label>
+                                  <Input value={selectedStaff?.phone || ""} onChange={(e) => setSelectedStaff(s => s ? { ...s, phone: e.target.value } : s)} />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Role</Label>
+                                  <Select value={selectedStaff?.role || ""} onValueChange={(v) => setSelectedStaff(s => s ? { ...s, role: v } : s)}>
+                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="production">Production</SelectItem>
+                                      <SelectItem value="sales">Sales</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Status</Label>
+                                  <Select value={selectedStaff?.isActive !== false ? "active" : "inactive"} onValueChange={(v) => setSelectedStaff(s => s ? { ...s, isActive: v === "active" } : s)}>
+                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="active">Active</SelectItem>
+                                      <SelectItem value="inactive">Inactive</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                {editError && <p className="text-sm text-red-500 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{editError}</p>}
+                              </div>
+                              {resetPwMsg && selectedStaff && resetPwMsg.uid === selectedStaff.uid && (
+                                <p className={`text-xs px-1 ${resetPwMsg.ok ? "text-green-600" : "text-red-500"}`}>{resetPwMsg.msg}</p>
+                              )}
+                              <DialogFooter className="flex-wrap gap-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="text-xs"
+                                  disabled={resetingPw === selectedStaff?.uid}
+                                  onClick={() => selectedStaff && handleResetPassword(selectedStaff)}
+                                >
+                                  {resetingPw === selectedStaff?.uid ? "Sending…" : "Send Password Reset Email"}
+                                </Button>
+                                <Button variant="outline" onClick={() => setIsEditOpen(false)}>Cancel</Button>
+                                <Button className="bg-primary hover:bg-primary/90" onClick={handleUpdateStaff} disabled={saving}>
+                                  {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : "Save Changes"}
+                                </Button>
+                              </DialogFooter>
+                            </DialogContent>
+                          </Dialog>
+
+                          {/* Deactivate */}
+                          {staff.isActive !== false && (
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button size="sm" variant="ghost" className="text-red-500 hover:text-red-700 hover:bg-red-50">
+                                  <UserX className="w-4 h-4" />
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>Deactivate Staff Member</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    This will block <strong>{staff.name}</strong> from logging in. You can re-activate them later via Edit.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                  <AlertDialogAction onClick={() => handleDeactivate(staff.uid)} className="bg-red-500 hover:bg-red-600">
+                                    Deactivate
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          )}
+
+                          {/* Disable record */}
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                                disabled={deletingUid === staff.uid}
+                              >
+                                {deletingUid === staff.uid ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="w-4 h-4" />
+                                )}
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Disable Staff Record</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  This will disable <strong>{staff.name}</strong> without deleting the record. You can re-activate them later via Edit.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction
+                                  onClick={() => handleDeleteStaff(staff)}
+                                  className="bg-red-500 hover:bg-red-600"
+                                >
+                                  Disable Record
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

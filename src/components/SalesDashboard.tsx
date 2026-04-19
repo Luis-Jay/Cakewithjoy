@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { ref, onValue } from "firebase/database";
+import { db } from "../config/firebase";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -37,120 +39,176 @@ interface Order {
   customer: string;
   cakeType: string;
   size: string;
-  total: string;
+  total: number;
   salesAgent: string;
-  status: "confirmed" | "pending" | "completed";
+  status: "confirmed" | "pending" | "completed" | "baking" | "ready" | "declined" | "quality_check";
   orderDate: Date;
   deliveryDate: Date;
   paymentRef: string;
 }
 
-// Mock orders data
-const MOCK_ORDERS: Order[] = [
-  {
-    id: "#12345",
-    customer: "Sarah Johnson",
-    cakeType: "Fondant Wedding Cake",
-    size: '3-Tier',
-    total: "₱11,000",
-    salesAgent: "Sales 1",
-    status: "confirmed",
-    orderDate: new Date(2026, 1, 5),
-    deliveryDate: new Date(2026, 1, 15),
-    paymentRef: "PAY-2026-001",
-  },
-  {
-    id: "#12346",
-    customer: "Mike Chen",
-    cakeType: "Birthday Celebration",
-    size: '8"x4"',
-    total: "₱1,800",
-    salesAgent: "Sales 2",
-    status: "confirmed",
-    orderDate: new Date(2026, 1, 7),
-    deliveryDate: new Date(2026, 1, 14),
-    paymentRef: "PAY-2026-002",
-  },
-  {
-    id: "#12347",
-    customer: "Emily Davis",
-    cakeType: "Chocolate Dream",
-    size: '8"x4"',
-    total: "₱2,000",
-    salesAgent: "Sales 1",
-    status: "confirmed",
-    orderDate: new Date(2026, 1, 10),
-    deliveryDate: new Date(2026, 1, 18),
-    paymentRef: "PAY-2026-003",
-  },
-  {
-    id: "#12348",
-    customer: "James Wilson",
-    cakeType: "Naked Cake",
-    size: '2-Tier',
-    total: "₱6,500",
-    salesAgent: "Sales 3",
-    status: "confirmed",
-    orderDate: new Date(2026, 1, 8),
-    deliveryDate: new Date(2026, 1, 20),
-    paymentRef: "PAY-2026-004",
-  },
-  {
-    id: "#12349",
-    customer: "Lisa Anderson",
-    cakeType: "Red Velvet Romance",
-    size: '8"x4"',
-    total: "₱1,900",
-    salesAgent: "Sales 2",
-    status: "confirmed",
-    orderDate: new Date(2026, 1, 12),
-    deliveryDate: new Date(2026, 1, 22),
-    paymentRef: "PAY-2026-005",
-  },
-  {
-    id: "#12350",
-    customer: "David Brown",
-    cakeType: "Ube Delight",
-    size: '6"x4"',
-    total: "₱1,700",
-    salesAgent: "Sales 1",
-    status: "confirmed",
-    orderDate: new Date(2026, 1, 15),
-    deliveryDate: new Date(2026, 1, 25),
-    paymentRef: "PAY-2026-006",
-  },
-  {
-    id: "#12351",
-    customer: "Anna Martinez",
-    cakeType: "Fondant Birthday",
-    size: '1-Tier (8"x6")',
-    total: "₱5,400",
-    salesAgent: "Sales 3",
-    status: "confirmed",
-    orderDate: new Date(2026, 1, 6),
-    deliveryDate: new Date(2026, 1, 16),
-    paymentRef: "PAY-2026-007",
-  },
-];
+const SALES_AGENT_STORAGE_KEY = "sales-dashboard:selected-agent";
+const SALES_MONTH_STORAGE_KEY = "sales-dashboard:selected-month";
+const DEFAULT_AGENT = "All Sales";
+type FirebaseRecord = Record<string, unknown>;
+
+const getInitialMonth = () => {
+  if (typeof window === "undefined") return new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const saved = window.localStorage.getItem(SALES_MONTH_STORAGE_KEY);
+  if (!saved) return new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+
+  const parsed = new Date(saved);
+  if (Number.isNaN(parsed.getTime())) return new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+
+  return new Date(parsed.getFullYear(), parsed.getMonth(), 1);
+};
+
+const getInitialAgent = () => {
+  if (typeof window === "undefined") return DEFAULT_AGENT;
+  return window.localStorage.getItem(SALES_AGENT_STORAGE_KEY) || DEFAULT_AGENT;
+};
+
+const getAgentName = (value: FirebaseRecord | null | undefined, fallback: string) =>
+  (typeof value?.name === "string" && value.name.trim()) ||
+  (typeof value?.fullName === "string" && value.fullName.trim()) ||
+  (typeof value?.full_name === "string" && value.full_name.trim()) ||
+  (typeof value?.email === "string" && value.email.trim()) ||
+  fallback;
 
 export function SalesDashboard() {
-  const [currentDate, setCurrentDate] = useState(new Date(2026, 1, 1)); // February 2026
-  const [selectedSalesAgent, setSelectedSalesAgent] = useState("Sales 1");
+  const [currentDate, setCurrentDate] = useState(getInitialMonth);
+  const [selectedSalesAgent, setSelectedSalesAgent] = useState(getInitialAgent);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [showOrdersDialog, setShowOrdersDialog] = useState(false);
   const [showReportPreview, setShowReportPreview] = useState(false);
   const [selectedReportType, setSelectedReportType] = useState<"sales" | "staff" | "inventory" | null>(null);
 
+  // Real data from Firebase
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [staffList, setStaffList] = useState<{ uid: string; name: string; role: string; isActive: boolean }[]>([]);
+  const [completedOrdersCount, setCompletedOrdersCount] = useState(0);
+  const [inventoryItems, setInventoryItems] = useState<{ id: string; name: string; batches: { quantity: number; expirationDate: string }[]; lowStockThreshold: number; unit: string }[]>([]);
+
+  useEffect(() => {
+    const unsubStaff = onValue(ref(db, "users"), (snap) => {
+      const data = snap.val();
+      if (!data) { setStaffList([]); return; }
+      setStaffList(
+        Object.entries(data as FirebaseRecord)
+          .map(([uid, rawValue]) => {
+            const value = (rawValue ?? {}) as FirebaseRecord;
+            return {
+            uid,
+            name: getAgentName(value, uid),
+            role: typeof value.role === "string" ? value.role : "",
+            isActive:
+              typeof value.isActive === "boolean"
+                ? value.isActive
+                : typeof value.is_active === "boolean"
+                  ? value.is_active
+                  : true,
+          };
+          })
+          .filter((staff) => staff.role === "sales")
+      );
+    });
+    const unsubOrders = onValue(ref(db, "allOrders"), (snap) => {
+      const data = snap.val();
+      if (!data) {
+        setOrders([]);
+        setCompletedOrdersCount(0);
+        return;
+      }
+      const list = Object.entries(data as FirebaseRecord).map(([id, rawValue]) => {
+        const value = (rawValue ?? {}) as FirebaseRecord;
+        const firstItem =
+          Array.isArray(value.items) && value.items.length > 0 && typeof value.items[0] === "object"
+            ? (value.items[0] as FirebaseRecord)
+            : null;
+        return {
+          id,
+          customer: typeof value.customerName === "string" ? value.customerName : "Unknown Customer",
+          cakeType:
+            (typeof value.cakeType === "string" && value.cakeType) ||
+            (typeof firstItem?.name === "string" && firstItem.name) ||
+            "Custom Cake",
+          size:
+            (typeof value.size === "string" && value.size) ||
+            (typeof firstItem?.size === "string" && firstItem.size) ||
+            "Custom",
+          total: Number(value.total ?? value.subtotal ?? 0),
+          salesAgent:
+            typeof value.salesAgent === "string" && value.salesAgent.trim() ? value.salesAgent.trim() : "Unassigned",
+          status: (typeof value.status === "string" ? value.status : "pending") as Order["status"],
+          orderDate: typeof value.createdAt === "string" ? new Date(value.createdAt) : new Date(),
+          deliveryDate: typeof value.pickupDate === "string" ? new Date(value.pickupDate) : new Date(),
+          paymentRef:
+            (typeof value.paymentRef === "string" && value.paymentRef) ||
+            (typeof value.paymentReference === "string" && value.paymentReference) ||
+            "N/A",
+        };
+      });
+      setOrders(list);
+      setCompletedOrdersCount(list.filter((order) => order.status === "completed").length);
+    });
+    const unsubInventory = onValue(ref(db, "inventory"), (snap) => {
+      const data = snap.val();
+      if (!data) { setInventoryItems([]); return; }
+      setInventoryItems(
+        Object.entries(data as FirebaseRecord).map(([id, rawValue]) => {
+          const value = (rawValue ?? {}) as FirebaseRecord;
+          return {
+            id,
+            name: typeof value.name === "string" ? value.name : "",
+            batches:
+              value.batches && typeof value.batches === "object"
+                ? (Object.values(value.batches as FirebaseRecord) as { quantity: number; expirationDate: string }[])
+                : [],
+            lowStockThreshold: Number(value.lowStockThreshold ?? 0),
+            unit: typeof value.unit === "string" ? value.unit : "",
+          };
+        })
+      );
+    });
+    return () => { unsubStaff(); unsubOrders(); unsubInventory(); };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(SALES_MONTH_STORAGE_KEY, currentDate.toISOString());
+  }, [currentDate]);
+
+  const salesAgentOptions = [
+    DEFAULT_AGENT,
+    ...Array.from(
+      new Set([
+        ...staffList.filter((staff) => staff.isActive).map((staff) => staff.name),
+        ...orders
+          .map((order) => order.salesAgent)
+          .filter((agent) => agent && agent !== DEFAULT_AGENT),
+      ])
+    ),
+  ];
+
+  const activeSalesAgent = salesAgentOptions.includes(selectedSalesAgent)
+    ? selectedSalesAgent
+    : (salesAgentOptions[0] ?? DEFAULT_AGENT);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(SALES_AGENT_STORAGE_KEY, activeSalesAgent);
+  }, [activeSalesAgent]);
+
   // Filter orders by sales agent
   const getOrdersForSalesAgent = (agent: string) => {
-    return MOCK_ORDERS.filter((order) => order.salesAgent === agent);
+    return orders.filter((order) => agent === DEFAULT_AGENT || order.salesAgent === agent);
   };
 
   // Get orders for a specific date
   const getOrdersForDate = (date: Date, agent: string) => {
-    return MOCK_ORDERS.filter(
+    return orders.filter(
       (order) =>
-        order.salesAgent === agent &&
+        (agent === DEFAULT_AGENT || order.salesAgent === agent) &&
         order.orderDate.getDate() === date.getDate() &&
         order.orderDate.getMonth() === date.getMonth() &&
         order.orderDate.getFullYear() === date.getFullYear()
@@ -159,10 +217,10 @@ export function SalesDashboard() {
 
   // Get all confirmed orders for calendar display
   const getConfirmedOrdersForDate = (date: Date, agent: string) => {
-    return MOCK_ORDERS.filter(
+    return orders.filter(
       (order) =>
-        order.salesAgent === agent &&
-        order.status === "confirmed" &&
+        (agent === DEFAULT_AGENT || order.salesAgent === agent) &&
+        order.status !== "declined" &&
         order.orderDate.getDate() === date.getDate() &&
         order.orderDate.getMonth() === date.getMonth() &&
         order.orderDate.getFullYear() === date.getFullYear()
@@ -179,17 +237,17 @@ export function SalesDashboard() {
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
     
-    let weekStart = new Date(firstDay);
+    const weekStart = new Date(firstDay);
     let weekNum = 1;
     
     while (weekStart <= lastDay) {
       const weekEnd = new Date(weekStart);
       weekEnd.setDate(weekEnd.getDate() + 6);
       
-      const ordersInWeek = MOCK_ORDERS.filter((order) => {
+      const ordersInWeek = orders.filter((order) => {
         return (
-          order.salesAgent === agent &&
-          order.status === "confirmed" &&
+          (agent === DEFAULT_AGENT || order.salesAgent === agent) &&
+          order.status !== "declined" &&
           order.orderDate >= weekStart &&
           order.orderDate <= weekEnd
         );
@@ -200,9 +258,7 @@ export function SalesDashboard() {
         start: new Date(weekStart),
         end: weekEnd > lastDay ? lastDay : weekEnd,
         orderCount: ordersInWeek.length,
-        totalRevenue: ordersInWeek.reduce((sum, order) => {
-          return sum + parseFloat(order.total.replace(/[₱,]/g, ""));
-        }, 0),
+        totalRevenue: ordersInWeek.reduce((sum, order) => sum + order.total, 0),
       });
       
       weekStart.setDate(weekStart.getDate() + 7);
@@ -254,14 +310,14 @@ export function SalesDashboard() {
   const monthName = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
   
   const calendarDays = generateCalendarDays();
-  const weeklySummaries = getWeeklySummary(selectedSalesAgent);
-  const agentOrders = getOrdersForSalesAgent(selectedSalesAgent);
+  const weeklySummaries = getWeeklySummary(activeSalesAgent);
+  const agentOrders = getOrdersForSalesAgent(activeSalesAgent);
   
   // Calculate stats for current sales agent
   const confirmedOrders = agentOrders.filter((o) => o.status === "confirmed").length;
   const totalRevenue = agentOrders
-    .filter((o) => o.status === "confirmed")
-    .reduce((sum, order) => sum + parseFloat(order.total.replace(/[₱,]/g, "")), 0);
+    .filter((o) => o.status !== "declined")
+    .reduce((sum, order) => sum + order.total, 0);
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -279,7 +335,7 @@ export function SalesDashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-muted-foreground mb-1">Total Orders</p>
-                <h2>{MOCK_ORDERS.length}</h2>
+                <h2>{agentOrders.length}</h2>
               </div>
               <div className="p-3 bg-muted rounded-lg text-orange-500">
                 <Package className="w-6 h-6" />
@@ -321,7 +377,7 @@ export function SalesDashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-muted-foreground mb-1">Active Agents</p>
-                <h2>3</h2>
+                <h2>{salesAgentOptions.filter((agent) => agent !== DEFAULT_AGENT).length}</h2>
               </div>
               <div className="p-3 bg-muted rounded-lg text-blue-500">
                 <User className="w-6 h-6" />
@@ -521,23 +577,17 @@ export function SalesDashboard() {
       </Card>
 
       {/* Sales Agent Tabs */}
-      <Tabs value={selectedSalesAgent} onValueChange={setSelectedSalesAgent} className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="Sales 1" className="gap-2">
-            <User className="w-4 h-4" />
-            Sales 1
-          </TabsTrigger>
-          <TabsTrigger value="Sales 2" className="gap-2">
-            <User className="w-4 h-4" />
-            Sales 2
-          </TabsTrigger>
-          <TabsTrigger value="Sales 3" className="gap-2">
-            <User className="w-4 h-4" />
-            Sales 3
-          </TabsTrigger>
+      <Tabs value={activeSalesAgent} onValueChange={setSelectedSalesAgent} className="space-y-6">
+        <TabsList className={`grid w-full`} style={{ gridTemplateColumns: `repeat(${Math.max(salesAgentOptions.length, 1)}, minmax(0, 1fr))` }}>
+          {salesAgentOptions.map((agent) => (
+            <TabsTrigger key={agent} value={agent} className="gap-2">
+              <User className="w-4 h-4" />
+              {agent}
+            </TabsTrigger>
+          ))}
         </TabsList>
 
-        {["Sales 1", "Sales 2", "Sales 3"].map((agent) => (
+        {salesAgentOptions.map((agent) => (
           <TabsContent key={agent} value={agent} className="space-y-6">
             {/* Weekly Summary */}
             <Card>
@@ -564,7 +614,7 @@ export function SalesDashboard() {
                         </div>
                         <div className="h-8 w-px bg-border" />
                         <div>
-                          <p className="text-sm text-muted-foreground">Confirmed Orders</p>
+                          <p className="text-sm text-muted-foreground">Orders</p>
                           <p className="text-xl font-semibold">{week.orderCount}</p>
                         </div>
                       </div>
@@ -664,7 +714,7 @@ export function SalesDashboard() {
                 <div className="mt-4 flex items-center gap-4 text-sm text-muted-foreground">
                   <div className="flex items-center gap-2">
                     <div className="w-4 h-4 border-2 border-primary bg-primary/10 rounded" />
-                    <span>Has confirmed orders</span>
+                    <span>Has orders</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="w-4 h-4 border border-border rounded" />
@@ -713,12 +763,12 @@ export function SalesDashboard() {
                               {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
                             </Badge>
                           </TableCell>
-                          <TableCell>
-                            {order.orderDate.toLocaleDateString()}
-                          </TableCell>
-                          <TableCell className="font-semibold">{order.total}</TableCell>
-                        </TableRow>
-                      ))}
+                        <TableCell>
+                          {order.orderDate.toLocaleDateString()}
+                        </TableCell>
+                        <TableCell className="font-semibold">₱{order.total.toLocaleString()}</TableCell>
+                      </TableRow>
+                    ))}
                       
                       {agentOrders.length === 0 && (
                         <TableRow>
@@ -748,13 +798,13 @@ export function SalesDashboard() {
               })}
             </DialogTitle>
             <DialogDescription>
-              Confirmed orders for {selectedSalesAgent} on this date
+              Orders for {activeSalesAgent} on this date
             </DialogDescription>
           </DialogHeader>
           
           <div className="space-y-4 pt-4">
             {selectedDate &&
-              getOrdersForDate(selectedDate, selectedSalesAgent).map((order) => (
+              getOrdersForDate(selectedDate, activeSalesAgent).map((order) => (
                 <Card key={order.id} className="border-2">
                   <CardContent className="pt-6 space-y-3">
                     <div className="flex items-start justify-between">
@@ -802,13 +852,13 @@ export function SalesDashboard() {
                     
                     <div className="pt-3 border-t flex items-center justify-between">
                       <span className="text-muted-foreground">Total Amount:</span>
-                      <span className="text-xl font-semibold text-primary">{order.total}</span>
+                      <span className="text-xl font-semibold text-primary">₱{order.total.toLocaleString()}</span>
                     </div>
                   </CardContent>
                 </Card>
               ))}
             
-            {selectedDate && getOrdersForDate(selectedDate, selectedSalesAgent).length === 0 && (
+            {selectedDate && getOrdersForDate(selectedDate, activeSalesAgent).length === 0 && (
               <p className="text-center text-muted-foreground py-8">
                 No orders found for this date
               </p>
@@ -865,7 +915,7 @@ export function SalesDashboard() {
                     <div className="grid grid-cols-3 gap-4">
                       <div className="p-4 bg-muted/30 rounded-lg">
                         <p className="text-sm text-muted-foreground mb-1">Total Orders</p>
-                        <p className="text-2xl font-semibold">{MOCK_ORDERS.length}</p>
+                        <p className="text-2xl font-semibold">{agentOrders.length}</p>
                       </div>
                       <div className="p-4 bg-muted/30 rounded-lg">
                         <p className="text-sm text-muted-foreground mb-1">Confirmed Orders</p>
@@ -879,11 +929,11 @@ export function SalesDashboard() {
                     <div className="border-t pt-4">
                       <p className="text-sm text-muted-foreground mb-2">Sales by Agent:</p>
                       <div className="space-y-2">
-                        {["Sales 1", "Sales 2", "Sales 3"].map((agent) => {
+                        {salesAgentOptions.filter((agent) => agent !== DEFAULT_AGENT).map((agent) => {
                           const agentData = getOrdersForSalesAgent(agent);
                           const agentRevenue = agentData
-                            .filter((o) => o.status === "confirmed")
-                            .reduce((sum, o) => sum + parseFloat(o.total.replace(/[₱,]/g, "")), 0);
+                            .filter((o) => o.status !== "declined")
+                            .reduce((sum, o) => sum + o.total, 0);
                           return (
                             <div key={agent} className="flex items-center justify-between p-3 bg-muted/20 rounded">
                               <span className="font-medium">{agent}</span>
@@ -904,72 +954,92 @@ export function SalesDashboard() {
                     <div className="grid grid-cols-3 gap-4">
                       <div className="p-4 bg-muted/30 rounded-lg">
                         <p className="text-sm text-muted-foreground mb-1">Total Staff</p>
-                        <p className="text-2xl font-semibold">12</p>
+                        <p className="text-2xl font-semibold">{staffList.length}</p>
                       </div>
                       <div className="p-4 bg-muted/30 rounded-lg">
-                        <p className="text-sm text-muted-foreground mb-1">Avg. Attendance</p>
-                        <p className="text-2xl font-semibold">95%</p>
+                        <p className="text-sm text-muted-foreground mb-1">Active Staff</p>
+                        <p className="text-2xl font-semibold">{staffList.filter((s) => s.isActive).length}</p>
                       </div>
                       <div className="p-4 bg-muted/30 rounded-lg">
-                        <p className="text-sm text-muted-foreground mb-1">Tasks Completed</p>
-                        <p className="text-2xl font-semibold">248</p>
+                        <p className="text-sm text-muted-foreground mb-1">Completed Orders</p>
+                        <p className="text-2xl font-semibold">{completedOrdersCount}</p>
                       </div>
                     </div>
                     <div className="border-t pt-4">
-                      <p className="text-sm text-muted-foreground mb-2">Top Performers:</p>
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between p-3 bg-muted/20 rounded">
-                          <span className="font-medium">Maria Santos</span>
-                          <Badge className="bg-green-100 text-green-800">Excellent</Badge>
+                      <p className="text-sm text-muted-foreground mb-2">Staff Members:</p>
+                      {staffList.length === 0 ? (
+                        <p className="text-sm text-muted-foreground italic">No staff records found.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {staffList.filter((s) => s.isActive).map((s) => (
+                            <div key={s.uid} className="flex items-center justify-between p-3 bg-muted/20 rounded">
+                              <span className="font-medium">{s.name}</span>
+                              <Badge className="bg-blue-100 text-blue-800 capitalize">{s.role}</Badge>
+                            </div>
+                          ))}
                         </div>
-                        <div className="flex items-center justify-between p-3 bg-muted/20 rounded">
-                          <span className="font-medium">Juan Dela Cruz</span>
-                          <Badge className="bg-green-100 text-green-800">Excellent</Badge>
-                        </div>
-                        <div className="flex items-center justify-between p-3 bg-muted/20 rounded">
-                          <span className="font-medium">Anna Reyes</span>
-                          <Badge className="bg-blue-100 text-blue-800">Good</Badge>
-                        </div>
-                      </div>
+                      )}
                     </div>
                   </>
                 )}
 
-                {selectedReportType === "inventory" && (
-                  <>
-                    <div className="grid grid-cols-3 gap-4">
-                      <div className="p-4 bg-muted/30 rounded-lg">
-                        <p className="text-sm text-muted-foreground mb-1">Total Items</p>
-                        <p className="text-2xl font-semibold">45</p>
-                      </div>
-                      <div className="p-4 bg-muted/30 rounded-lg">
-                        <p className="text-sm text-muted-foreground mb-1">Low Stock Items</p>
-                        <p className="text-2xl font-semibold text-red-600">8</p>
-                      </div>
-                      <div className="p-4 bg-muted/30 rounded-lg">
-                        <p className="text-sm text-muted-foreground mb-1">Expiring Soon</p>
-                        <p className="text-2xl font-semibold text-orange-600">3</p>
-                      </div>
-                    </div>
-                    <div className="border-t pt-4">
-                      <p className="text-sm text-muted-foreground mb-2">Critical Items:</p>
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between p-3 bg-muted/20 rounded">
-                          <span className="font-medium">Unsalted Butter</span>
-                          <Badge className="bg-red-100 text-red-800">Low Stock</Badge>
+                {selectedReportType === "inventory" && (() => {
+                  const now = new Date();
+                  const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+                  const lowStockItems = inventoryItems.filter((item) => {
+                    const total = item.batches.reduce((s, b) => s + (b.quantity ?? 0), 0);
+                    return total <= item.lowStockThreshold;
+                  });
+                  const expiringSoonItems = inventoryItems.filter((item) =>
+                    item.batches.some((b) => {
+                      if (!b.expirationDate) return false;
+                      const expirationDate = new Date(b.expirationDate);
+                      if (Number.isNaN(expirationDate.getTime())) return false;
+                      return expirationDate <= in30Days && expirationDate >= now;
+                    })
+                  );
+                  return (
+                    <>
+                      <div className="grid grid-cols-3 gap-4">
+                        <div className="p-4 bg-muted/30 rounded-lg">
+                          <p className="text-sm text-muted-foreground mb-1">Total Items</p>
+                          <p className="text-2xl font-semibold">{inventoryItems.length}</p>
                         </div>
-                        <div className="flex items-center justify-between p-3 bg-muted/20 rounded">
-                          <span className="font-medium">Heavy Cream</span>
-                          <Badge className="bg-orange-100 text-orange-800">Expiring Soon</Badge>
+                        <div className="p-4 bg-muted/30 rounded-lg">
+                          <p className="text-sm text-muted-foreground mb-1">Low Stock Items</p>
+                          <p className={`text-2xl font-semibold ${lowStockItems.length > 0 ? "text-red-600" : ""}`}>{lowStockItems.length}</p>
                         </div>
-                        <div className="flex items-center justify-between p-3 bg-muted/20 rounded">
-                          <span className="font-medium">Cocoa Powder</span>
-                          <Badge className="bg-red-100 text-red-800">Low Stock</Badge>
+                        <div className="p-4 bg-muted/30 rounded-lg">
+                          <p className="text-sm text-muted-foreground mb-1">Expiring Soon</p>
+                          <p className={`text-2xl font-semibold ${expiringSoonItems.length > 0 ? "text-orange-600" : ""}`}>{expiringSoonItems.length}</p>
                         </div>
                       </div>
-                    </div>
-                  </>
-                )}
+                      <div className="border-t pt-4">
+                        <p className="text-sm text-muted-foreground mb-2">Critical Items:</p>
+                        {lowStockItems.length === 0 && expiringSoonItems.length === 0 ? (
+                          <p className="text-sm text-muted-foreground italic">All items are well-stocked.</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {lowStockItems.map((item) => (
+                              <div key={item.id} className="flex items-center justify-between p-3 bg-muted/20 rounded">
+                                <span className="font-medium">{item.name}</span>
+                                <Badge className="bg-red-100 text-red-800">Low Stock</Badge>
+                              </div>
+                            ))}
+                            {expiringSoonItems
+                              .filter((item) => !lowStockItems.find((l) => l.id === item.id))
+                              .map((item) => (
+                                <div key={item.id} className="flex items-center justify-between p-3 bg-muted/20 rounded">
+                                  <span className="font-medium">{item.name}</span>
+                                  <Badge className="bg-orange-100 text-orange-800">Expiring Soon</Badge>
+                                </div>
+                              ))}
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
               </CardContent>
             </Card>
 

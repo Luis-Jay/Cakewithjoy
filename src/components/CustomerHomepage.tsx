@@ -14,7 +14,23 @@ const BANNER_STYLES: Record<BannerType, { color: string; bg: string; border: str
 
 interface CustomerHomepageProps {
   onNavigate?: (view: string, options?: { autoOpenUpload?: boolean; category?: string }) => void;
+  isGuest?: boolean;
 }
+
+const normalizeBanner = (value: unknown): { message: string; type: BannerType; active: boolean } | null => {
+  const raw = (value ?? {}) as Partial<{ message: string; type: BannerType; active: boolean }>;
+  const message = typeof raw.message === "string" ? raw.message.trim() : "";
+  const type: BannerType =
+    raw.type === "warning" || raw.type === "festive" || raw.type === "info"
+      ? raw.type
+      : "info";
+
+  if (!message || !raw.active) {
+    return null;
+  }
+
+  return { message, type, active: true };
+};
 
 const S = {
   root: { background: "#F4E9F2", minHeight: "100vh", fontFamily: "system-ui, sans-serif" } as React.CSSProperties,
@@ -63,7 +79,7 @@ const STATUS_STEP_IDX: Record<OrderStatus, number> = {
   pending: 0, confirmed: 1, baking: 2, ready: 3, completed: 4,
 };
 
-export function CustomerHomepage({ onNavigate }: CustomerHomepageProps) {
+export function CustomerHomepage({ onNavigate, isGuest = false }: CustomerHomepageProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const user = useAuthStore((s) => s.user);
   const [latestOrder, setLatestOrder] = useState<LatestOrder | null>(null);
@@ -111,8 +127,8 @@ export function CustomerHomepage({ onNavigate }: CustomerHomepageProps) {
 
   useEffect(() => {
     const unsub = onValue(dbRef(db, "announcementBanner"), (snapshot) => {
-      const data = snapshot.val();
-      if (data?.active && data?.message) {
+      const data = normalizeBanner(snapshot.val());
+      if (data) {
         setBanner(data);
         setBannerDismissed(false); // re-show if admin changes the message
       } else {
@@ -176,7 +192,7 @@ export function CustomerHomepage({ onNavigate }: CustomerHomepageProps) {
         <div style={S.heroDeco} />
         <div style={S.heroDeco2} />
         <div style={{ maxWidth: 960, margin: "0 auto", position: "relative" }}>
-          <span style={S.heroLabel}>Welcome back 🎂</span>
+          <span style={S.heroLabel}>Welcome to Cake with Joy 🎂</span>
           <h1 style={S.heroTitle}>Your perfect cake<br />starts here</h1>
           <p style={S.heroSub}>
             Handcrafted cakes for every occasion. Upload your design or let our bakers create something special just for you.
@@ -229,7 +245,6 @@ export function CustomerHomepage({ onNavigate }: CustomerHomepageProps) {
             {[
               { label: "Upload Design", icon: <Upload size={14} />, action: () => onNavigate?.("customize", { autoOpenUpload: true }) },
               { label: "Choose Template", icon: <Menu size={14} />, action: () => onNavigate?.("menu") },
-              { label: "Build from Scratch", icon: <Cake size={14} />, action: () => onNavigate?.("customize") },
             ].map(btn => (
               <button
                 key={btn.label}
@@ -245,7 +260,7 @@ export function CustomerHomepage({ onNavigate }: CustomerHomepageProps) {
         </div>
 
         {/* ── Track My Order ── */}
-        <div style={{ marginBottom: 32 }}>
+        {!isGuest && <div style={{ marginBottom: 32 }}>
           <p style={S.sectionTitle}>Track My Order</p>
           <div style={S.trackCard}>
             {latestOrder ? (
@@ -288,7 +303,7 @@ export function CustomerHomepage({ onNavigate }: CustomerHomepageProps) {
               {latestOrder ? "View Full Details" : "View All Orders"}
             </button>
           </div>
-        </div>
+        </div>}
 
         {/* ── Featured Cakes ── */}
         <div style={{ marginBottom: 32 }}>
@@ -345,29 +360,6 @@ export function CustomerHomepage({ onNavigate }: CustomerHomepageProps) {
           </div>
         </div>
 
-        {/* ── Quick Actions ── */}
-        <div>
-          <p style={S.sectionTitle}>Quick Actions</p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
-            {[
-              { icon: <Package size={22} color="#c77db3" />, label: "Place Order", desc: "Browse our menu and place a new order", action: () => onNavigate?.("menu") },
-              { icon: <Menu size={22} color="#c77db3" />, label: "View Menu", desc: "Explore our full range of delicious treats", action: () => onNavigate?.("menu") },
-              { icon: <Phone size={22} color="#c77db3" />, label: "Contact Bakery", desc: "Get in touch for special requests", action: () => {} },
-            ].map(item => (
-              <div
-                key={item.label}
-                style={S.actionCard}
-                onClick={item.action}
-                onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.transform = "translateY(-3px)"; (e.currentTarget as HTMLDivElement).style.boxShadow = "0 8px 24px rgba(199,125,179,0.15)"; (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(199,125,179,0.4)"; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.transform = "none"; (e.currentTarget as HTMLDivElement).style.boxShadow = "0 2px 12px rgba(199,125,179,0.06)"; (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(216,159,200,0.2)"; }}
-              >
-                <div style={S.actionIcon}>{item.icon}</div>
-                <p style={{ margin: 0, fontWeight: 600, fontSize: 14, color: "#4a2e42", marginBottom: 6 }}>{item.label}</p>
-                <p style={{ margin: 0, fontSize: 12, color: "#8b6f84", lineHeight: 1.5 }}>{item.desc}</p>
-              </div>
-            ))}
-          </div>
-        </div>
 
       </div>
     </div>

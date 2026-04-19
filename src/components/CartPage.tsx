@@ -7,6 +7,8 @@ import { CheckoutModal } from "./CheckoutModal";
 interface CartPageProps {
   onBack?: () => void;
   onOrderPlaced?: () => void;
+  isGuest?: boolean;
+  onSignIn?: () => void;
 }
 
 // Inline styles for the component — no Tailwind dependency
@@ -350,16 +352,19 @@ function CakeEmoji({ style }: { style?: React.CSSProperties }) {
   return <span style={style}>🎂</span>;
 }
 
-export function CartPage({ onBack, onOrderPlaced }: CartPageProps) {
+export function CartPage({ onBack, onOrderPlaced, isGuest = false, onSignIn }: CartPageProps) {
   const { items, updateQty, removeItem, clearCart } = useCartStore();
   const user = useAuthStore((s) => s.user);
   const [rushOrder, setRushOrder] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
+  const [guestCheckoutWarning, setGuestCheckoutWarning] = useState("");
 
+  const [paymentType, setPaymentType] = useState<"downpayment" | "full">("downpayment");
   const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const rushFee = rushOrder ? Math.round(subtotal * 0.2) : 0;
   const total = subtotal + rushFee;
   const downpayment = Math.round(total * 0.5);
+  const amountDue = paymentType === "full" ? total : downpayment;
   const isEmpty = items.length === 0;
 
   return (
@@ -551,23 +556,80 @@ export function CartPage({ onBack, onOrderPlaced }: CartPageProps) {
                   </div>
                 )}
 
+                {/* Payment type selector */}
+                <div style={{ marginBottom: 16 }}>
+                  <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" as const, color: "#8b6f84", fontFamily: "system-ui, sans-serif" }}>
+                    Payment Option
+                  </p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    {([
+                      { value: "downpayment", label: "50% Deposit", sub: `₱${downpayment.toLocaleString()} now`, note: "Balance on pickup" },
+                      { value: "full", label: "Full Payment", sub: `₱${total.toLocaleString()}`, note: "Pay everything now" },
+                    ] as const).map(({ value, label, sub, note }) => {
+                      const active = paymentType === value;
+                      return (
+                        <button
+                          key={value}
+                          onClick={() => setPaymentType(value)}
+                          style={{
+                            padding: "11px 10px",
+                            borderRadius: 12,
+                            border: `1.5px solid ${active ? "#c77db3" : "rgba(216,159,200,0.35)"}`,
+                            background: active ? "rgba(199,125,179,0.08)" : "#fff",
+                            cursor: "pointer",
+                            textAlign: "left" as const,
+                            fontFamily: "system-ui, sans-serif",
+                            transition: "all 0.15s",
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                            <div style={{
+                              width: 14, height: 14, borderRadius: "50%",
+                              border: `2px solid ${active ? "#c77db3" : "rgba(216,159,200,0.5)"}`,
+                              background: active ? "#c77db3" : "#fff",
+                              flexShrink: 0,
+                            }} />
+                            <span style={{ fontSize: 12, fontWeight: 700, color: active ? "#c77db3" : "#4a2e42" }}>{label}</span>
+                          </div>
+                          <p style={{ margin: "0 0 1px", fontSize: 13, fontWeight: 800, color: active ? "#c77db3" : "#4a2e42" }}>{sub}</p>
+                          <p style={{ margin: 0, fontSize: 10, color: "#8b6f84" }}>{note}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Amount due card */}
                 <div style={styles.downpayCard}>
                   <div>
-                    <p style={styles.downpayLabel}>Downpayment Due</p>
-                    <p style={styles.downpaySub}>50% of ₱{total.toLocaleString()}</p>
+                    <p style={styles.downpayLabel}>{paymentType === "full" ? "Full Payment Due" : "Deposit Due Now"}</p>
+                    <p style={styles.downpaySub}>{paymentType === "full" ? "Complete payment" : "50% of ₱" + total.toLocaleString()}</p>
                   </div>
-                  <span style={styles.downpayAmount}>₱{downpayment.toLocaleString()}</span>
+                  <span style={styles.downpayAmount}>₱{amountDue.toLocaleString()}</span>
                 </div>
 
                 <button
                   style={styles.checkoutBtn}
-                  onClick={() => setShowCheckout(true)}
+                  onClick={() => {
+                    if (!user || isGuest) {
+                      setGuestCheckoutWarning("Sign in to proceed with checkout.");
+                      onSignIn?.();
+                      return;
+                    }
+                    setGuestCheckoutWarning("");
+                    setShowCheckout(true);
+                  }}
                   onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.9"; e.currentTarget.style.transform = "translateY(-1px)"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "none"; }}
                 >
                   Proceed to Checkout
                   <ChevronRight size={16} />
                 </button>
+                {guestCheckoutWarning && (
+                  <p style={{ color: "#dc2626", fontSize: 12, marginTop: 8, textAlign: "center" }}>
+                    {guestCheckoutWarning}
+                  </p>
+                )}
 
                 <button
                   style={styles.continueBtn}
@@ -611,6 +673,8 @@ export function CartPage({ onBack, onOrderPlaced }: CartPageProps) {
           rushFee={rushFee}
           total={total}
           downpayment={downpayment}
+          amountDue={amountDue}
+          paymentType={paymentType}
           isRushOrder={rushOrder}
           userId={user.uid}
           userName={user.displayName ?? user.email ?? "Customer"}

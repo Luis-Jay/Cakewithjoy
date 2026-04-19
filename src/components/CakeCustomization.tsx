@@ -20,7 +20,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from "./ui/dialog";
-import { Upload, ShoppingCart, Minus, Plus, X, ImageIcon, Zap } from "lucide-react";
+import { Upload, ShoppingCart, Minus, Plus, X, ImageIcon, Zap, BookmarkCheck, Bookmark } from "lucide-react";
+import { toast } from "sonner";
 import { useCartStore } from "../store/cartStore";
 import { ref, onValue } from "firebase/database";
 import { db } from "../config/firebase";
@@ -55,8 +56,9 @@ const INCLUDED_ADDONS: DesignAddon[] = [
   { id: "dedication-board", label: "Dedication Board", price: 0, included: true },
 ];
 
-export function CakeCustomization({ onGoToCart, autoOpenUpload }: { onGoToCart?: () => void; autoOpenUpload?: boolean }) {
+export function CakeCustomization({ onGoToCart, autoOpenUpload, isGuest = false, onSignIn }: { onGoToCart?: () => void; autoOpenUpload?: boolean; isGuest?: boolean; onSignIn?: () => void }) {
   const addItem = useCartStore((s) => s.addItem);
+  const [guestWarning, setGuestWarning] = useState("");
 
   // Auto-open file picker when coming from "Upload Design"
   useEffect(() => {
@@ -66,6 +68,8 @@ export function CakeCustomization({ onGoToCart, autoOpenUpload }: { onGoToCart?:
       }, 100);
     }
   }, [autoOpenUpload]);
+
+  const DRAFT_KEY = "cakeCustomization_draft";
 
   const [cakeType, setCakeType] = useState<CakeType>("Fondant");
   const [selectedTier, setSelectedTier] = useState("");
@@ -87,6 +91,70 @@ export function CakeCustomization({ onGoToCart, autoOpenUpload }: { onGoToCart?:
   const [idPhotoFile, setIdPhotoFile] = useState<File | null>(null);
   const [idHoldingPhotoFile, setIdHoldingPhotoFile] = useState<File | null>(null);
   const [showQRPayment, setShowQRPayment] = useState(false);
+  const [gcashQR, setGcashQR] = useState("");
+  const [bdoQR, setBdoQR] = useState("");
+  const [gcashNumber, setGcashNumber] = useState("");
+  const [bdoAccount, setBdoAccount] = useState("");
+
+  useEffect(() => {
+    const unsub = onValue(ref(db, "paymentQR"), (snap) => {
+      const data = snap.val() ?? {};
+      setGcashQR(data.gcashQR ?? "");
+      setBdoQR(data.bdoQR ?? "");
+      setGcashNumber(data.gcashNumber ?? "");
+      setBdoAccount(data.bdoAccount ?? "");
+    });
+    return () => unsub();
+  }, []);
+  const [hasDraft, setHasDraft] = useState(() => !!localStorage.getItem(DRAFT_KEY));
+
+  const saveDraft = () => {
+    const draft = {
+      cakeType,
+      selectedTier,
+      selectedFlavor,
+      message,
+      selectedAddons,
+      discountType,
+      rushOrder,
+      bundles: dessertBundles.map(({ id, quantity }) => ({ id, quantity })),
+    };
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    setHasDraft(true);
+    toast.success("Customization saved!", { description: "You can restore it anytime." });
+  };
+
+  const loadDraft = () => {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return;
+    try {
+      const draft = JSON.parse(raw);
+      if (draft.cakeType) setCakeType(draft.cakeType);
+      if (draft.selectedTier) setSelectedTier(draft.selectedTier);
+      if (draft.selectedFlavor) setSelectedFlavor(draft.selectedFlavor);
+      if (draft.message !== undefined) setMessage(draft.message);
+      if (draft.selectedAddons) setSelectedAddons(draft.selectedAddons);
+      if (draft.discountType) setDiscountType(draft.discountType);
+      if (typeof draft.rushOrder === "boolean") setRushOrder(draft.rushOrder);
+      if (draft.bundles) {
+        setDessertBundles((prev) =>
+          prev.map((b) => {
+            const saved = draft.bundles.find((s: { id: string; quantity: number }) => s.id === b.id);
+            return saved ? { ...b, quantity: saved.quantity } : b;
+          })
+        );
+      }
+      toast.success("Draft restored!", { description: "Your saved customization has been loaded." });
+    } catch {
+      toast.error("Could not restore draft.");
+    }
+  };
+
+  const clearDraft = () => {
+    localStorage.removeItem(DRAFT_KEY);
+    setHasDraft(false);
+    toast("Draft cleared.");
+  };
 
   // Load admin-configured pricing from Firebase
   useEffect(() => {
@@ -205,12 +273,20 @@ export function CakeCustomization({ onGoToCart, autoOpenUpload }: { onGoToCart?:
   const finalPrice = discountedPrice + rushFee;
 
   const handleAddToCart = () => {
+    if (isGuest) {
+      setGuestWarning("Sign in to add custom cake to cart and continue checkout.");
+      onSignIn?.();
+      return;
+    }
+
+    setGuestWarning("");
     const tierLabel = (pricing.tiers[cakeType] ?? []).find((o) => o.id === selectedTier)?.label ?? "";
     addItem({
       id: `custom-${Date.now()}`,
       name: `${cakeType} Cake`,
       description: `${tierLabel} · ${selectedFlavor}${message ? ` · "${message}"` : ""}`,
       price: finalPrice,
+      cakeImage: uploadedImage ?? undefined,
     });
     onGoToCart?.();
   };
@@ -280,6 +356,39 @@ export function CakeCustomization({ onGoToCart, autoOpenUpload }: { onGoToCart?:
 
       {/* ── Main Content ── */}
       <div className="container mx-auto px-6" style={{ paddingTop: 32, paddingBottom: 64 }}>
+
+        {/* Draft banner */}
+        {hasDraft ? (
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            background: "rgba(199,125,179,0.08)",
+            border: "1px solid rgba(199,125,179,0.3)",
+            borderRadius: 14,
+            padding: "12px 18px",
+            marginBottom: 24,
+            flexWrap: "wrap",
+          }}>
+            <BookmarkCheck size={16} color="#c77db3" />
+            <span style={{ fontSize: 13, color: "#4a2e42", fontWeight: 500, flex: 1 }}>
+              You have a saved customization draft.
+            </span>
+            <button
+              onClick={loadDraft}
+              style={{ fontSize: 12, fontWeight: 700, color: "#c77db3", background: "rgba(199,125,179,0.12)", border: "1px solid rgba(199,125,179,0.3)", borderRadius: 8, padding: "5px 14px", cursor: "pointer" }}
+            >
+              Restore Draft
+            </button>
+            <button
+              onClick={clearDraft}
+              style={{ fontSize: 12, color: "#8b6f84", background: "none", border: "none", cursor: "pointer", padding: "5px 6px" }}
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 24, alignItems: "start" }}>
 
           {/* ── LEFT COLUMN ── */}
@@ -803,9 +912,37 @@ export function CakeCustomization({ onGoToCart, autoOpenUpload }: { onGoToCart?:
                   </div>
                 )}
 
+                {/* Save for Later */}
+                {!isGuest && (
+                  <button
+                    onClick={saveDraft}
+                    style={{
+                      marginTop: 18,
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 8,
+                      padding: "11px 0",
+                      borderRadius: 100,
+                      fontSize: 13,
+                      fontWeight: 600,
+                      fontFamily: "system-ui, sans-serif",
+                      cursor: "pointer",
+                      border: "1.5px solid rgba(199,125,179,0.4)",
+                      background: "transparent",
+                      color: "#c77db3",
+                      transition: "all 0.2s",
+                    }}
+                  >
+                    <Bookmark style={{ width: 15, height: 15 }} />
+                    Save for Later
+                  </button>
+                )}
+
                 {/* Add to Cart */}
                 <button
-                  disabled={!selectedTier || !selectedFlavor}
+                  disabled={!selectedTier || !selectedFlavor || isGuest}
                   onClick={handleAddToCart}
                   style={{
                     marginTop: 18,
@@ -819,20 +956,25 @@ export function CakeCustomization({ onGoToCart, autoOpenUpload }: { onGoToCart?:
                     fontSize: 15,
                     fontWeight: 700,
                     fontFamily: "system-ui, sans-serif",
-                    cursor: !selectedTier || !selectedFlavor ? "not-allowed" : "pointer",
+                    cursor: !selectedTier || !selectedFlavor || isGuest ? "not-allowed" : "pointer",
                     border: "none",
-                    background: !selectedTier || !selectedFlavor
+                    background: !selectedTier || !selectedFlavor || isGuest
                       ? "rgba(216,159,200,0.35)"
                       : "linear-gradient(135deg, #d89fc8 0%, #c77db3 100%)",
-                    color: !selectedTier || !selectedFlavor ? "#c0a0b8" : "#fff",
-                    boxShadow: !selectedTier || !selectedFlavor ? "none" : "0 6px 20px rgba(199,125,179,0.4)",
+                    color: !selectedTier || !selectedFlavor || isGuest ? "#c0a0b8" : "#fff",
+                    boxShadow: !selectedTier || !selectedFlavor || isGuest ? "none" : "0 6px 20px rgba(199,125,179,0.4)",
                     transition: "all 0.2s",
                     letterSpacing: "0.02em",
                   }}
                 >
                   <ShoppingCart style={{ width: 18, height: 18 }} />
-                  Add to Cart
+                  {isGuest ? "Sign in to add" : "Add to Cart"}
                 </button>
+                {guestWarning && (
+                  <p style={{ color: "#dc2626", fontSize: 12, marginTop: 8, textAlign: "center" }}>
+                    {guestWarning}
+                  </p>
+                )}
 
                 {/* View QR Payment */}
                 {selectedTier && (
@@ -878,52 +1020,46 @@ export function CakeCustomization({ onGoToCart, autoOpenUpload }: { onGoToCart?:
 
           <div className="space-y-4 pt-4">
             {/* GCash Payment */}
-            <div className="border-2 border-blue-200 dark:border-blue-800 rounded-lg p-4 bg-blue-50 dark:bg-blue-950/20">
-              <div className="text-center mb-3">
-                <p className="font-semibold text-blue-900 dark:text-blue-100 mb-1">GCash Payment</p>
-                <p className="text-xs text-blue-700 dark:text-blue-300">Scan with GCash App</p>
-              </div>
-              <div className="bg-white p-4 rounded-lg mx-auto w-fit">
-                <div className="w-48 h-48 bg-gradient-to-br from-blue-100 to-blue-200 rounded-lg flex items-center justify-center border-4 border-blue-400">
-                  <div className="text-center">
-                    <div className="grid grid-cols-8 gap-1 mb-2">
-                      {Array.from({ length: 64 }).map((_, i) => (
-                        <div key={i} className={`w-2 h-2 ${Math.random() > 0.5 ? 'bg-blue-900' : 'bg-white'}`} />
-                      ))}
-                    </div>
-                    <p className="text-xs font-semibold text-blue-900">GCASH QR</p>
+            <div style={{ border: "1.5px solid rgba(59,130,246,0.35)", borderRadius: 16, padding: "16px", background: "rgba(59,130,246,0.04)" }}>
+              <p style={{ margin: "0 0 4px", fontWeight: 700, fontSize: 14, color: "#1d4ed8" }}>GCash Payment</p>
+              <p style={{ margin: "0 0 14px", fontSize: 12, color: "#3b82f6" }}>Scan with GCash App</p>
+              <div style={{ background: "#fff", borderRadius: 12, padding: 12, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12, border: "1px solid rgba(59,130,246,0.15)" }}>
+                {gcashQR ? (
+                  <img src={gcashQR} alt="GCash QR" style={{ width: 180, height: 180, objectFit: "contain", borderRadius: 8 }} />
+                ) : (
+                  <div style={{ width: 180, height: 180, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(59,130,246,0.06)", borderRadius: 10, border: "2px dashed rgba(59,130,246,0.3)" }}>
+                    <div style={{ fontSize: 36, marginBottom: 10 }}>📱</div>
+                    <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "#1d4ed8", textAlign: "center" }}>GCash QR</p>
+                    <p style={{ margin: "4px 0 0", fontSize: 10, color: "#93c5fd", textAlign: "center", padding: "0 12px" }}>Upload in Store Settings</p>
                   </div>
-                </div>
+                )}
               </div>
-              <div className="mt-3 space-y-1 text-xs text-blue-900 dark:text-blue-100">
-                <p><span className="font-semibold">Account Name:</span> Cake with Joy</p>
-                <p><span className="font-semibold">Account Number:</span> 09XX XXX XXXX</p>
-                <p><span className="font-semibold">Amount:</span> ₱{(finalPrice * 0.5).toLocaleString()}</p>
+              <div style={{ fontSize: 12, color: "#1d4ed8", lineHeight: 1.7 }}>
+                <p style={{ margin: 0 }}><strong>Account Name:</strong> Cake with Joy</p>
+                {gcashNumber && <p style={{ margin: 0 }}><strong>Number:</strong> {gcashNumber}</p>}
+                <p style={{ margin: 0 }}><strong>Amount:</strong> ₱{(finalPrice * 0.5).toLocaleString()}</p>
               </div>
             </div>
 
             {/* BDO Payment */}
-            <div className="border-2 border-orange-200 dark:border-orange-800 rounded-lg p-4 bg-orange-50 dark:bg-orange-950/20">
-              <div className="text-center mb-3">
-                <p className="font-semibold text-orange-900 dark:text-orange-100 mb-1">BDO Bank Transfer</p>
-                <p className="text-xs text-orange-700 dark:text-orange-300">Scan with BDO App or use account details</p>
-              </div>
-              <div className="bg-white p-4 rounded-lg mx-auto w-fit">
-                <div className="w-48 h-48 bg-gradient-to-br from-orange-100 to-orange-200 rounded-lg flex items-center justify-center border-4 border-orange-400">
-                  <div className="text-center">
-                    <div className="grid grid-cols-8 gap-1 mb-2">
-                      {Array.from({ length: 64 }).map((_, i) => (
-                        <div key={i} className={`w-2 h-2 ${Math.random() > 0.5 ? 'bg-orange-900' : 'bg-white'}`} />
-                      ))}
-                    </div>
-                    <p className="text-xs font-semibold text-orange-900">BDO QR</p>
+            <div style={{ border: "1.5px solid rgba(234,88,12,0.35)", borderRadius: 16, padding: "16px", background: "rgba(234,88,12,0.04)" }}>
+              <p style={{ margin: "0 0 4px", fontWeight: 700, fontSize: 14, color: "#c2410c" }}>BDO Bank Transfer</p>
+              <p style={{ margin: "0 0 14px", fontSize: 12, color: "#ea580c" }}>Scan with BDO App or use account details</p>
+              <div style={{ background: "#fff", borderRadius: 12, padding: 12, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12, border: "1px solid rgba(234,88,12,0.15)" }}>
+                {bdoQR ? (
+                  <img src={bdoQR} alt="BDO QR" style={{ width: 180, height: 180, objectFit: "contain", borderRadius: 8 }} />
+                ) : (
+                  <div style={{ width: 180, height: 180, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(234,88,12,0.06)", borderRadius: 10, border: "2px dashed rgba(234,88,12,0.3)" }}>
+                    <div style={{ fontSize: 36, marginBottom: 10 }}>🏦</div>
+                    <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "#c2410c", textAlign: "center" }}>BDO QR</p>
+                    <p style={{ margin: "4px 0 0", fontSize: 10, color: "#fdba74", textAlign: "center", padding: "0 12px" }}>Upload in Store Settings</p>
                   </div>
-                </div>
+                )}
               </div>
-              <div className="mt-3 space-y-1 text-xs text-orange-900 dark:text-orange-100">
-                <p><span className="font-semibold">Account Name:</span> Cake with Joy</p>
-                <p><span className="font-semibold">Account Number:</span> 0123 4567 8901</p>
-                <p><span className="font-semibold">Amount:</span> ₱{(finalPrice * 0.5).toLocaleString()}</p>
+              <div style={{ fontSize: 12, color: "#c2410c", lineHeight: 1.7 }}>
+                <p style={{ margin: 0 }}><strong>Account Name:</strong> Cake with Joy</p>
+                {bdoAccount && <p style={{ margin: 0 }}><strong>Account Number:</strong> {bdoAccount}</p>}
+                <p style={{ margin: 0 }}><strong>Amount:</strong> ₱{(finalPrice * 0.5).toLocaleString()}</p>
               </div>
             </div>
 

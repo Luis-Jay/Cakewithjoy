@@ -86,9 +86,9 @@ def delete_user(
     user = db.get(User, uid)
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
-    db.delete(user)
+    user.is_active = False
     db.commit()
     try:
-        firebase_auth.delete_user(uid)
+        firebase_auth.revoke_refresh_tokens(uid)
     except Exception:
-        pass  # Firebase user may already be gone
+        pass

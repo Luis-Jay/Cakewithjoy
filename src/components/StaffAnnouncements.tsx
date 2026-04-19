@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { ref, onValue } from "firebase/database";
+import { db } from "../config/firebase";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Bell, Megaphone, Calendar } from "lucide-react";
 
 interface Announcement {
-  id: number;
+  id: string;
   title: string;
   message: string;
   priority: "normal" | "important" | "urgent";
@@ -14,36 +16,27 @@ interface Announcement {
 }
 
 export function StaffAnnouncements() {
-  // In a real app, this would be fetched from a backend/database
-  const [announcements] = useState<Announcement[]>([
-    {
-      id: 1,
-      title: "Holiday Schedule Update",
-      message: "The bakery will be closed on December 25th for Christmas. Please plan your orders accordingly.",
-      priority: "important",
-      targetAudience: "All Staff",
-      date: "Dec 1, 2025",
-      postedBy: "Admin",
-    },
-    {
-      id: 2,
-      title: "New Equipment Training",
-      message: "Mandatory training session for the new industrial oven will be held on Dec 15th at 9:00 AM.",
-      priority: "urgent",
-      targetAudience: "Bakers",
-      date: "Nov 28, 2025",
-      postedBy: "Admin",
-    },
-    {
-      id: 3,
-      title: "Customer Feedback Reminder",
-      message: "Please remember to ask customers for feedback after each order completion. This helps us improve our service.",
-      priority: "normal",
-      targetAudience: "Customer Service",
-      date: "Nov 25, 2025",
-      postedBy: "Admin",
-    },
-  ]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsub = onValue(ref(db, "announcements"), (snap) => {
+      const data = snap.val();
+      if (!data) { setAnnouncements([]); setLoading(false); return; }
+      const list: Announcement[] = Object.entries(data).map(([key, val]: [string, any]) => ({
+        id: val.id ?? key,
+        title: val.title ?? "",
+        message: val.message ?? "",
+        priority: val.priority ?? "normal",
+        targetAudience: val.targetAudience ?? "",
+        date: val.date ?? "",
+        postedBy: val.postedBy ?? "",
+      }));
+      setAnnouncements(list);
+      setLoading(false);
+    }, () => { setAnnouncements([]); setLoading(false); });
+    return () => unsub();
+  }, []);
 
   const getPriorityColor = (priority: string) => {
     const colors: Record<string, string> = {
@@ -62,6 +55,16 @@ export function StaffAnnouncements() {
     }
     return "🟢";
   };
+
+  if (loading) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="flex items-center justify-center min-h-[300px]">
+          <p className="text-muted-foreground text-lg">Loading announcements…</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="container mx-auto px-4 py-8">

@@ -1,4 +1,7 @@
-import { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { ref, onValue, push, update, remove } from "firebase/database";
+import { db } from "../config/firebase";
+import { useAuthStore } from "../store/authStore";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -62,9 +65,10 @@ import {
 } from "lucide-react";
 import { ReportPreview } from "./ReportPreview";
 import { toast } from "sonner@2.0.3";
+import { downloadReportCsv, downloadReportExcel, type ReportExportPayload } from "../utils/reportExport";
 
 interface Announcement {
-  id: number;
+  id: string;
   title: string;
   message: string;
   priority: "normal" | "important" | "urgent";
@@ -73,7 +77,36 @@ interface Announcement {
   postedBy: string;
 }
 
+type OrderStatus = "pending" | "confirmed" | "baking" | "ready" | "completed" | "declined";
+type PaymentType = "downpayment" | "deposit" | "full";
+
+interface DashboardOrder {
+  id: string;
+  customer: string;
+  status: OrderStatus;
+  date: string;
+  total: number;
+  paymentType: PaymentType;
+  hasPaymentProof: boolean;
+  createdAt: string;
+  completedAt?: string;
+  clearedByAdmin?: boolean;
+}
+
+const normalizePaymentType = (order: {
+  paymentType?: PaymentType | null;
+  amountDue?: number;
+  total?: number;
+}): PaymentType => {
+  if (order.paymentType === "full") return "full";
+  if (order.paymentType === "deposit") return "deposit";
+  if (order.paymentType === "downpayment") return "downpayment";
+  if ((order.amountDue ?? 0) >= (order.total ?? 0) && (order.total ?? 0) > 0) return "full";
+  return "downpayment";
+};
+
 export function AdminDashboard() {
+  const authUser = useAuthStore((state) => state.user);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [isReportDialogOpen, setIsReportDialogOpen] = useState(false);
@@ -81,6 +114,8 @@ export function AdminDashboard() {
   const [reportType, setReportType] = useState("");
   const [reportFormat, setReportFormat] = useState("pdf");
   const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({});
+  const [lastReportGeneratedAt, setLastReportGeneratedAt] = useState<Date | null>(null);
+  const [reportExportData, setReportExportData] = useState<ReportExportPayload | null>(null);
   const [selectedReportSections, setSelectedReportSections] = useState({
     summary: true,
     orders: true,
@@ -93,98 +128,147 @@ export function AdminDashboard() {
   const [isAnnouncementDialogOpen, setIsAnnouncementDialogOpen] = useState(false);
   const [isEditAnnouncementOpen, setIsEditAnnouncementOpen] = useState(false);
   const [selectedAnnouncement, setSelectedAnnouncement] = useState<Announcement | null>(null);
+  const [announcementSaving, setAnnouncementSaving] = useState(false);
+  const [editAnnouncementSaving, setEditAnnouncementSaving] = useState(false);
+  const [announcementError, setAnnouncementError] = useState("");
+  const [editAnnouncementError, setEditAnnouncementError] = useState("");
   const [newAnnouncement, setNewAnnouncement] = useState({
     title: "",
     message: "",
     priority: "normal" as "normal" | "important" | "urgent",
     targetAudience: "all",
   });
-  const [announcements, setAnnouncements] = useState<Announcement[]>([
-    {
-      id: 1,
-      title: "Holiday Schedule Update",
-      message: "The bakery will be closed on December 25th for Christmas. Please plan your orders accordingly.",
-      priority: "important",
-      targetAudience: "All Staff",
-      date: "Dec 1, 2025",
-      postedBy: "Admin",
-    },
-    {
-      id: 2,
-      title: "New Equipment Training",
-      message: "Mandatory training session for the new industrial oven will be held on Dec 15th at 9:00 AM.",
-      priority: "urgent",
-      targetAudience: "Bakers",
-      date: "Nov 28, 2025",
-      postedBy: "Admin",
-    },
-    {
-      id: 3,
-      title: "Customer Feedback Reminder",
-      message: "Please remember to ask customers for feedback after each order completion. This helps us improve our service.",
-      priority: "normal",
-      targetAudience: "Customer Service",
-      date: "Nov 25, 2025",
-      postedBy: "Admin",
-    },
-  ]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [orders, setOrders] = useState<DashboardOrder[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(true);
+  const [inventorySnapshot, setInventorySnapshot] = useState<Record<string, any>>({});
+  const [staffSnapshot, setStaffSnapshot] = useState<Record<string, any>>({});
+
+  const resetReportOptions = () => {
+    setReportType("");
+    setReportFormat("pdf");
+    setDateRange({});
+    setSelectedReportSections({
+      summary: true,
+      orders: true,
+      revenue: true,
+      inventory: false,
+      staff: false,
+    });
+  };
+
+  const resetDashboardFilters = () => {
+    setSearchQuery("");
+    setStatusFilter("all");
+  };
+
+  useEffect(() => {
+    const unsub = onValue(ref(db, "announcements"), (snap) => {
+      const data = snap.val();
+      if (!data) { setAnnouncements([]); return; }
+      const list: Announcement[] = Object.entries(data).map(([key, val]: [string, any]) => ({
+        id: key,
+        title: val.title ?? "",
+        message: val.message ?? "",
+        priority: val.priority ?? "normal",
+        targetAudience: val.targetAudience ?? "",
+        date: val.date ?? "",
+        postedBy: val.postedBy ?? "Admin",
+      }));
+      setAnnouncements(list);
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onValue(ref(db, "allOrders"), (snap) => {
+      const data = snap.val();
+      if (!data) {
+        setOrders([]);
+        setOrdersLoading(false);
+        return;
+      }
+
+      const list: DashboardOrder[] = Object.entries(data)
+        .map(([key, val]: [string, any]) => {
+          const total = Number(val.total ?? val.subtotal ?? 0);
+          return {
+            id: key,
+            customer: val.customerName ?? "Unknown Customer",
+            status: (val.status ?? "pending") as OrderStatus,
+            date: val.createdAt
+              ? new Date(val.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+              : "No date",
+            total,
+            paymentType: normalizePaymentType({
+              paymentType: val.paymentType ?? null,
+              amountDue: Number(val.amountDue ?? 0),
+              total,
+            }),
+            hasPaymentProof: !!val.paymentProof,
+            createdAt: val.createdAt ?? "",
+            completedAt: val.completedAt ?? "",
+            clearedByAdmin: !!val.clearedByAdmin,
+          };
+        })
+        .filter((order) => !order.clearedByAdmin)
+        .filter((order) => order.status !== "declined")
+        .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+
+      setOrders(list);
+      setOrdersLoading(false);
+    });
+
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsubInventory = onValue(ref(db, "inventory"), (snap) => {
+      setInventorySnapshot(snap.val() ?? {});
+    });
+    const unsubStaff = onValue(ref(db, "users"), (snap) => {
+      setStaffSnapshot(snap.val() ?? {});
+    });
+
+    return () => {
+      unsubInventory();
+      unsubStaff();
+    };
+  }, []);
+
+  const todayKey = new Date().toDateString();
+  const pendingOrdersCount = orders.filter((order) => order.status === "pending").length;
+  const hasCompletedAtData = orders.some((order) => !!order.completedAt);
+  const completedTodayCount = orders.filter((order) => {
+    if (order.status !== "completed") return false;
+    const comparisonValue = hasCompletedAtData ? order.completedAt : order.createdAt;
+    if (!comparisonValue) return false;
+    return new Date(comparisonValue).toDateString() === todayKey;
+  }).length;
+  const lowStockItemsCount = Object.values(inventorySnapshot).filter((item: any) => {
+    const batches = item?.batches && typeof item.batches === "object" ? Object.values(item.batches) : [];
+    const totalStock = batches.reduce((sum: number, batch: any) => sum + Number(batch?.quantity ?? 0), 0);
+    return totalStock <= Number(item?.lowStockThreshold ?? 0);
+  }).length;
+  const todaysRevenue = orders
+    .filter((order) => new Date(order.createdAt).toDateString() === todayKey && order.status !== "declined")
+    .reduce((sum, order) => sum + order.total, 0);
 
   const stats = [
-    { label: "Pending Orders", value: "8", icon: Package, color: "text-orange-500" },
-    { label: "Completed Today", value: "12", icon: CheckCircle, color: "text-green-500" },
-    { label: "Low Stock Items", value: "3", icon: AlertCircle, color: "text-red-500" },
-    { label: "Today's Revenue", value: "₱69,720", icon: DollarSign, color: "text-primary" },
-  ];
-
-  const orders = [
-    {
-      id: "#12345",
-      customer: "Sarah Johnson",
-      status: "baking",
-      date: "Nov 11, 2025",
-      total: "₱2,570.00",
-      paymentRef: "PAY-2025-001",
-    },
-    {
-      id: "#12344",
-      customer: "Mike Chen",
-      status: "ready",
-      date: "Nov 11, 2025",
-      total: "₱7,000.00",
-      paymentRef: "PAY-2025-002",
-    },
-    {
-      id: "#12343",
-      customer: "Emily Davis",
-      status: "completed",
-      date: "Nov 10, 2025",
-      total: "₱2,180.00",
-      paymentRef: "PAY-2025-003",
-    },
-    {
-      id: "#12342",
-      customer: "James Wilson",
-      status: "pending",
-      date: "Nov 11, 2025",
-      total: "₱2,940.00",
-      paymentRef: "PAY-2025-004",
-    },
-    {
-      id: "#12341",
-      customer: "Lisa Anderson",
-      status: "baking",
-      date: "Nov 11, 2025",
-      total: "₱3,800.00",
-      paymentRef: "PAY-2025-005",
-    },
+    { label: "Pending Orders", value: String(pendingOrdersCount), icon: Package, color: "text-orange-500" },
+    { label: hasCompletedAtData ? "Completed Today" : "Created & Completed Today", value: String(completedTodayCount), icon: CheckCircle, color: "text-green-500" },
+    { label: "Low Stock Items", value: String(lowStockItemsCount), icon: AlertCircle, color: "text-red-500" },
+    { label: "Today's Revenue", value: `₱${todaysRevenue.toLocaleString()}`, icon: DollarSign, color: "text-primary" },
   ];
 
   const getStatusBadge = (status: string) => {
     const variants: Record<string, { label: string; className: string }> = {
       pending: { label: "Pending", className: "bg-yellow-100 text-yellow-800" },
+      confirmed: { label: "Confirmed", className: "bg-sky-100 text-sky-800" },
       baking: { label: "Baking", className: "bg-blue-100 text-blue-800" },
       ready: { label: "Ready", className: "bg-green-100 text-green-800" },
       completed: { label: "Completed", className: "bg-gray-100 text-gray-800" },
+      declined: { label: "Declined", className: "bg-red-100 text-red-800" },
     };
     const variant = variants[status] || variants.pending;
     return (
@@ -194,55 +278,140 @@ export function AdminDashboard() {
     );
   };
 
+  const filteredOrders = orders
+    .filter((order) => statusFilter === "all" || order.status === statusFilter)
+    .filter((order) =>
+      searchQuery.trim() === "" ||
+      order.customer.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      order.id.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    .slice(0, 5);
+
   const handleGenerateReport = () => {
-    // Simulate report generation
-    console.log("Generating report:", {
-      type: reportType,
-      format: reportFormat,
-      dateRange: { from: dateRange.from, to: dateRange.to },
-      sections: selectedReportSections,
-    });
-    
-    // Close configuration dialog and open report preview
     setIsReportDialogOpen(false);
     setIsReportPreviewOpen(true);
-    
-    // Show success toast
+    setLastReportGeneratedAt(new Date());
     toast.success(`${reportType.charAt(0).toUpperCase() + reportType.slice(1)} report generated successfully!`);
   };
 
-  const handleAddAnnouncement = () => {
-    const newId = announcements.length > 0 ? announcements[announcements.length - 1].id + 1 : 1;
-    const newAnnouncementWithId = {
-      ...newAnnouncement,
-      id: newId,
-      date: new Date().toLocaleDateString(),
-      postedBy: "Admin",
-    };
-    setAnnouncements([...announcements, newAnnouncementWithId]);
-    setNewAnnouncement({
-      title: "",
-      message: "",
-      priority: "normal" as "normal" | "important" | "urgent",
-      targetAudience: "all",
-    });
-    setIsAnnouncementDialogOpen(false);
+  const handlePrintReport = () => {
+    const reportRoot = document.getElementById("report-preview-root");
+    if (!reportRoot) {
+      toast.error("Report preview is not ready yet.");
+      return;
+    }
+
+    const printWindow = window.open("", "_blank", "width=1200,height=900");
+    if (!printWindow) {
+      toast.error("Unable to open print preview.");
+      return;
+    }
+
+    const styles = Array.from(document.querySelectorAll("style, link[rel='stylesheet']"))
+      .map((node) => node.outerHTML)
+      .join("\n");
+
+    printWindow.document.open();
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>${reportExportData?.reportType ?? "Cake with Joy Report"}</title>
+          ${styles}
+          <style>
+            body { margin: 0; background: white; }
+          </style>
+        </head>
+        <body>
+          ${reportRoot.innerHTML}
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
   };
 
-  const handleEditAnnouncement = () => {
-    if (selectedAnnouncement) {
-      const updatedAnnouncements = announcements.map((ann) =>
-        ann.id === selectedAnnouncement.id ? { ...ann, ...newAnnouncement } : ann
-      );
-      setAnnouncements(updatedAnnouncements);
-      setIsEditAnnouncementOpen(false);
+  const handleDownloadReport = () => {
+    if (!reportExportData) {
+      toast.error("Report data is still loading.");
+      return;
+    }
+
+    if (reportFormat === "csv") {
+      downloadReportCsv(reportExportData);
+      toast.success("CSV report downloaded.");
+      return;
+    }
+
+    if (reportFormat === "excel") {
+      downloadReportExcel(reportExportData);
+      toast.success("Excel report downloaded.");
+      return;
+    }
+
+    handlePrintReport();
+    toast.success(reportFormat === "pdf" ? "Print dialog opened. Choose Save as PDF to export." : "Print dialog opened.");
+  };
+
+  const handleAddAnnouncement = async () => {
+    const title = newAnnouncement.title.trim();
+    const message = newAnnouncement.message.trim();
+    if (!title || !message || announcementSaving) return;
+
+    setAnnouncementError("");
+    setAnnouncementSaving(true);
+    const payload = {
+      ...newAnnouncement,
+      title,
+      message,
+      date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+      postedBy: "Admin",
+    };
+    try {
+      await push(ref(db, "announcements"), payload);
+      setNewAnnouncement({ title: "", message: "", priority: "normal" as "normal" | "important" | "urgent", targetAudience: "all" });
+      setIsAnnouncementDialogOpen(false);
+      toast.success("Announcement added successfully.");
+    } catch (error) {
+      console.error("Failed to add announcement", error);
+      setAnnouncementError("Could not add announcement. Please check your Firebase permissions and try again.");
+      toast.error("Could not add announcement. Please check your Firebase permissions and try again.");
+    } finally {
+      setAnnouncementSaving(false);
     }
   };
 
-  const handleDeleteAnnouncement = (id: number) => {
-    const updatedAnnouncements = announcements.filter((ann) => ann.id !== id);
-    setAnnouncements(updatedAnnouncements);
+  const handleEditAnnouncement = async () => {
+    const title = newAnnouncement.title.trim();
+    const message = newAnnouncement.message.trim();
+    if (!selectedAnnouncement || !title || !message || editAnnouncementSaving) return;
+
+    setEditAnnouncementError("");
+    setEditAnnouncementSaving(true);
+    try {
+      await update(ref(db, `announcements/${selectedAnnouncement.id}`), { ...newAnnouncement, title, message });
+      setIsEditAnnouncementOpen(false);
+      toast.success("Announcement updated successfully.");
+    } catch (error) {
+      console.error("Failed to update announcement", error);
+      setEditAnnouncementError("Could not update announcement. Please try again.");
+      toast.error("Could not update announcement. Please try again.");
+    } finally {
+      setEditAnnouncementSaving(false);
+    }
   };
+
+  const handleDeleteAnnouncement = async (id: string) => {
+    try {
+      await remove(ref(db, `announcements/${id}`));
+      toast.success("Announcement deleted.");
+    } catch (error) {
+      console.error("Failed to delete announcement", error);
+      toast.error("Could not delete announcement. Please try again.");
+    }
+  };
+
+  const canSubmitAnnouncement = newAnnouncement.title.trim().length > 0 && newAnnouncement.message.trim().length > 0;
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -324,7 +493,7 @@ export function AdminDashboard() {
 
                   {/* Date Range */}
                   <div className="space-y-2">
-                    <Label>Select Date Range</Label>
+                    <Label>Pickup Date Range</Label>
                     <CalendarComponent
                       mode="range"
                       selectedRange={dateRange}
@@ -469,7 +638,7 @@ export function AdminDashboard() {
                       <span>
                         Report will include data from{" "}
                         {dateRange.from ? dateRange.from.toLocaleDateString() : "..."} to{" "}
-                        {dateRange.to ? dateRange.to.toLocaleDateString() : "..."}
+                        {dateRange.to ? dateRange.to.toLocaleDateString() : "..."} based on pickup date
                       </span>
                     </p>
                     <p className="flex items-center gap-2 text-muted-foreground">
@@ -482,6 +651,9 @@ export function AdminDashboard() {
                 </div>
 
                 <DialogFooter>
+                  <Button variant="outline" onClick={resetReportOptions}>
+                    Reset
+                  </Button>
                   <Button variant="outline" onClick={() => setIsReportDialogOpen(false)}>
                     Cancel
                   </Button>
@@ -506,7 +678,7 @@ export function AdminDashboard() {
               </div>
               <div>
                 <p className="text-muted-foreground">Last Report</p>
-                <p>Nov 1, 2025</p>
+                <p>{lastReportGeneratedAt ? lastReportGeneratedAt.toLocaleDateString() : "Not generated yet"}</p>
               </div>
             </div>
             <div className="flex items-center gap-3 p-4 border border-border rounded-lg">
@@ -514,8 +686,10 @@ export function AdminDashboard() {
                 <TrendingUp className="w-5 h-5 text-green-600" />
               </div>
               <div>
-                <p className="text-muted-foreground">Monthly Growth</p>
-                <p className="text-green-600">+12.5%</p>
+                <p className="text-muted-foreground">Active Staff</p>
+                <p className="text-green-600">
+                  {Object.values(staffSnapshot).filter((staff: any) => staff?.isActive !== false).length}
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-3 p-4 border border-border rounded-lg">
@@ -523,8 +697,8 @@ export function AdminDashboard() {
                 <Download className="w-5 h-5 text-purple-600" />
               </div>
               <div>
-                <p className="text-muted-foreground">Reports Generated</p>
-                <p>24 this month</p>
+                <p className="text-muted-foreground">Orders In System</p>
+                <p>{orders.length}</p>
               </div>
             </div>
           </div>
@@ -553,11 +727,15 @@ export function AdminDashboard() {
                 <SelectContent>
                   <SelectItem value="all">All Orders</SelectItem>
                   <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="confirmed">Confirmed</SelectItem>
                   <SelectItem value="baking">Baking</SelectItem>
                   <SelectItem value="ready">Ready</SelectItem>
                   <SelectItem value="completed">Completed</SelectItem>
                 </SelectContent>
               </Select>
+              <Button variant="outline" onClick={resetDashboardFilters}>
+                Reset Filters
+              </Button>
             </div>
           </div>
         </CardHeader>
@@ -571,40 +749,59 @@ export function AdminDashboard() {
                   <TableHead>Status</TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Total</TableHead>
-                  <TableHead>Payment Ref</TableHead>
+                  <TableHead>Payment</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {orders.map((order) => (
-                  <TableRow key={order.id}>
-                    <TableCell>{order.id}</TableCell>
-                    <TableCell>{order.customer}</TableCell>
-                    <TableCell>{getStatusBadge(order.status)}</TableCell>
-                    <TableCell>{order.date}</TableCell>
-                    <TableCell>{order.total}</TableCell>
-                    <TableCell>
-                      <span className="text-xs font-mono text-muted-foreground">{order.paymentRef}</span>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        {order.status !== "completed" && (
-                          <Button size="sm" variant="outline">
-                            Update Status
-                          </Button>
-                        )}
-                        {order.status === "ready" && (
-                          <Button size="sm" className="bg-primary hover:bg-primary/90">
-                            Mark Complete
-                          </Button>
-                        )}
-                        <Button size="sm" variant="ghost">
-                          <MoreHorizontal className="w-4 h-4" />
-                        </Button>
-                      </div>
+                {ordersLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                      Loading live orders...
                     </TableCell>
                   </TableRow>
-                ))}
+                ) : filteredOrders.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                      No orders match the current search or filter.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filteredOrders.map((order) => (
+                    <TableRow key={order.id}>
+                      <TableCell className="font-mono text-xs">{order.id.slice(0, 8)}</TableCell>
+                      <TableCell>{order.customer}</TableCell>
+                      <TableCell>{getStatusBadge(order.status)}</TableCell>
+                      <TableCell>{order.date}</TableCell>
+                      <TableCell>₱{order.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-col">
+                          <span className="text-sm capitalize">{order.paymentType === "full" ? "Full payment" : "Deposit"}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {order.hasPaymentProof ? "Proof uploaded" : "No proof yet"}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          {order.status !== "completed" && (
+                            <Button size="sm" variant="outline">
+                              Update Status
+                            </Button>
+                          )}
+                          {order.status === "ready" && (
+                            <Button size="sm" className="bg-primary hover:bg-primary/90">
+                              Mark Complete
+                            </Button>
+                          )}
+                          <Button size="sm" variant="ghost">
+                            <MoreHorizontal className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
               </TableBody>
             </Table>
           </div>
@@ -725,16 +922,23 @@ export function AdminDashboard() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-6 py-4">
+          <form
+            className="space-y-6 py-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void handleAddAnnouncement();
+            }}
+          >
             {/* Title */}
             <div className="space-y-2">
               <Label htmlFor="announcement-title">Title</Label>
               <Input
                 id="announcement-title"
                 value={newAnnouncement.title}
-                onChange={(e) =>
-                  setNewAnnouncement({ ...newAnnouncement, title: e.target.value })
-                }
+                onChange={(e) => {
+                  setAnnouncementError("");
+                  setNewAnnouncement({ ...newAnnouncement, title: e.target.value });
+                }}
                 className="w-full"
               />
             </div>
@@ -745,9 +949,10 @@ export function AdminDashboard() {
               <Textarea
                 id="announcement-message"
                 value={newAnnouncement.message}
-                onChange={(e) =>
-                  setNewAnnouncement({ ...newAnnouncement, message: e.target.value })
-                }
+                onChange={(e) => {
+                  setAnnouncementError("");
+                  setNewAnnouncement({ ...newAnnouncement, message: e.target.value });
+                }}
                 className="w-full"
               />
             </div>
@@ -758,7 +963,10 @@ export function AdminDashboard() {
               <Select
                 value={newAnnouncement.priority}
                 onValueChange={(value) =>
-                  setNewAnnouncement({ ...newAnnouncement, priority: value as "normal" | "important" | "urgent" })
+                  {
+                    setAnnouncementError("");
+                    setNewAnnouncement({ ...newAnnouncement, priority: value as "normal" | "important" | "urgent" });
+                  }
                 }
               >
                 <SelectTrigger id="announcement-priority">
@@ -778,7 +986,10 @@ export function AdminDashboard() {
               <Select
                 value={newAnnouncement.targetAudience}
                 onValueChange={(value) =>
-                  setNewAnnouncement({ ...newAnnouncement, targetAudience: value })
+                  {
+                    setAnnouncementError("");
+                    setNewAnnouncement({ ...newAnnouncement, targetAudience: value });
+                  }
                 }
               >
                 <SelectTrigger id="announcement-target-audience">
@@ -791,24 +1002,27 @@ export function AdminDashboard() {
                 </SelectContent>
               </Select>
             </div>
-          </div>
-
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setIsAnnouncementDialogOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              className="bg-primary hover:bg-primary/90 gap-2"
-              onClick={handleAddAnnouncement}
-              disabled={!newAnnouncement.title || !newAnnouncement.message}
-            >
-              <Plus className="w-4 h-4" />
-              Add Announcement
-            </Button>
-          </DialogFooter>
+            {announcementError && (
+              <p className="text-sm text-red-600">{announcementError}</p>
+            )}
+            <DialogFooter className="pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setIsAnnouncementDialogOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                className="bg-primary hover:bg-primary/90 gap-2"
+                disabled={!canSubmitAnnouncement || announcementSaving}
+              >
+                <Plus className="w-4 h-4" />
+                {announcementSaving ? "Adding..." : "Add Announcement"}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -825,16 +1039,23 @@ export function AdminDashboard() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-6 py-4">
+          <form
+            className="space-y-6 py-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void handleEditAnnouncement();
+            }}
+          >
             {/* Title */}
             <div className="space-y-2">
               <Label htmlFor="announcement-title">Title</Label>
               <Input
                 id="announcement-title"
                 value={newAnnouncement.title}
-                onChange={(e) =>
-                  setNewAnnouncement({ ...newAnnouncement, title: e.target.value })
-                }
+                onChange={(e) => {
+                  setEditAnnouncementError("");
+                  setNewAnnouncement({ ...newAnnouncement, title: e.target.value });
+                }}
                 className="w-full"
               />
             </div>
@@ -845,9 +1066,10 @@ export function AdminDashboard() {
               <Textarea
                 id="announcement-message"
                 value={newAnnouncement.message}
-                onChange={(e) =>
-                  setNewAnnouncement({ ...newAnnouncement, message: e.target.value })
-                }
+                onChange={(e) => {
+                  setEditAnnouncementError("");
+                  setNewAnnouncement({ ...newAnnouncement, message: e.target.value });
+                }}
                 className="w-full"
               />
             </div>
@@ -858,7 +1080,10 @@ export function AdminDashboard() {
               <Select
                 value={newAnnouncement.priority}
                 onValueChange={(value) =>
-                  setNewAnnouncement({ ...newAnnouncement, priority: value as "normal" | "important" | "urgent" })
+                  {
+                    setEditAnnouncementError("");
+                    setNewAnnouncement({ ...newAnnouncement, priority: value as "normal" | "important" | "urgent" });
+                  }
                 }
               >
                 <SelectTrigger id="announcement-priority">
@@ -878,7 +1103,10 @@ export function AdminDashboard() {
               <Select
                 value={newAnnouncement.targetAudience}
                 onValueChange={(value) =>
-                  setNewAnnouncement({ ...newAnnouncement, targetAudience: value })
+                  {
+                    setEditAnnouncementError("");
+                    setNewAnnouncement({ ...newAnnouncement, targetAudience: value });
+                  }
                 }
               >
                 <SelectTrigger id="announcement-target-audience">
@@ -891,24 +1119,27 @@ export function AdminDashboard() {
                 </SelectContent>
               </Select>
             </div>
-          </div>
-
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setIsEditAnnouncementOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              className="bg-primary hover:bg-primary/90 gap-2"
-              onClick={handleEditAnnouncement}
-              disabled={!newAnnouncement.title || !newAnnouncement.message}
-            >
-              <Edit className="w-4 h-4" />
-              Update Announcement
-            </Button>
-          </DialogFooter>
+            {editAnnouncementError && (
+              <p className="text-sm text-red-600">{editAnnouncementError}</p>
+            )}
+            <DialogFooter className="pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setIsEditAnnouncementOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                className="bg-primary hover:bg-primary/90 gap-2"
+                disabled={!canSubmitAnnouncement || editAnnouncementSaving}
+              >
+                <Edit className="w-4 h-4" />
+                {editAnnouncementSaving ? "Updating..." : "Update Announcement"}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -917,32 +1148,38 @@ export function AdminDashboard() {
         open={isReportPreviewOpen}
         onOpenChange={setIsReportPreviewOpen}
       >
-        <DialogContent className="max-w-[98vw] w-full max-h-[98vh] overflow-y-auto p-0">
-          <div className="sticky top-0 z-10 bg-background border-b px-4 py-3">
+        <DialogContent className="max-w-[96vw] w-full h-[92dvh] max-h-[92dvh] flex flex-col overflow-hidden p-0">
+          <div className="flex-shrink-0 bg-background/95 backdrop-blur border-b px-5 py-4">
             <DialogHeader>
-              <DialogTitle className="text-lg">Report Preview</DialogTitle>
+              <DialogTitle className="text-xl">Report Preview</DialogTitle>
               <DialogDescription className="text-sm">
                 {reportType.charAt(0).toUpperCase() + reportType.slice(1)} report for {dateRange.from?.toLocaleDateString()} - {dateRange.to?.toLocaleDateString()}
               </DialogDescription>
             </DialogHeader>
           </div>
 
-          <div className="p-4">
-            <ReportPreview
-              reportType={reportType}
-              dateRange={dateRange}
-              sections={selectedReportSections}
-            />
+          <div
+            className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-muted/20 p-5 touch-pan-y [scrollbar-gutter:stable] [scroll-behavior:smooth]"
+            style={{ WebkitOverflowScrolling: "touch" }}
+            tabIndex={0}
+          >
+            <div id="report-preview-root">
+              <ReportPreview
+                reportType={reportType}
+                dateRange={dateRange}
+                sections={selectedReportSections}
+                generatedBy={authUser?.displayName || authUser?.email || "Admin"}
+                generatedAt={lastReportGeneratedAt ?? new Date()}
+                onDataReady={setReportExportData}
+              />
+            </div>
           </div>
 
-          <div className="sticky bottom-0 z-10 bg-background border-t px-4 py-3">
+          <div className="flex-shrink-0 bg-background/95 backdrop-blur border-t px-5 py-4">
             <DialogFooter className="flex gap-2">
               <Button
                 variant="outline"
-                onClick={() => {
-                  // Simulate printing
-                  window.print();
-                }}
+                onClick={handlePrintReport}
                 className="gap-2"
               >
                 <Printer className="w-4 h-4" />
@@ -950,10 +1187,7 @@ export function AdminDashboard() {
               </Button>
               <Button
                 variant="outline"
-                onClick={() => {
-                  // Simulate download
-                  toast.success(`Report downloaded as ${reportFormat.toUpperCase()}`);
-                }}
+                onClick={handleDownloadReport}
                 className="gap-2"
               >
                 <Download className="w-4 h-4" />

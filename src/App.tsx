@@ -7,6 +7,7 @@ import { CakeCustomization } from "./components/CakeCustomization";
 import { ReadyMadeCakes } from "./components/ReadyMadeCakes";
 import { OrderTracking } from "./components/OrderTracking";
 import { SalesDashboard } from "./components/SalesDashboard";
+import { AdminDashboard } from "./components/AdminDashboard";
 import { InventoryManagement } from "./components/InventoryManagement";
 import { OrderSummaryCards } from "./components/OrderSummaryCards";
 import { StaffManagement } from "./components/StaffManagement";
@@ -18,8 +19,12 @@ import { OrderManagement } from "./components/OrderManagement";
 import { MenuManagement } from "./components/MenuManagement";
 import { StoreSettings } from "./components/StoreSettings";
 import { PricingManagement } from "./components/PricingManagement";
+import { ProfilePage } from "./components/ProfilePage";
+import { SupportCenter } from "./components/SupportCenter";
+import { SupportManagement } from "./components/SupportManagement";
 import { Spinner } from "./components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "./components/ui/tabs";
+import { Toaster } from "./components/ui/sonner";
 import {
   LayoutDashboard,
   Home,
@@ -33,23 +38,29 @@ import {
   ClipboardList,
   Settings,
   DollarSign,
+  Headset,
 } from "lucide-react";
 import { useAuth } from "./hooks/useAuth";
 import { authService } from "./services/authService";
 import { useCartStore } from "./store/cartStore";
+import { useAuthStore } from "./store/authStore";
 import { useCartSync } from "./hooks/useCartSync";
 
-type CustomerView = "home" | "customize" | "menu" | "orders" | "cart";
+type CustomerView = "home" | "customize" | "menu" | "orders" | "cart" | "profile" | "support";
 type StaffView = "staff-dashboard" | "order-summary" | "inventory" | "announcements" | "production-schedule";
-type AdminView = "admin" | "order-management" | "menu-management" | "store-settings" | "pricing-management" | "order-summary" | "inventory" | "staff-management" | "announcements" | "production-schedule";
-type View = CustomerView | StaffView | AdminView;
+type ProductionView = "production-dashboard" | "order-summary" | "inventory" | "announcements" | "production-schedule";
+type SalesView = "sales-orders" | "announcements";
+type AdminView = "admin" | "order-management" | "menu-management" | "store-settings" | "pricing-management" | "order-summary" | "inventory" | "staff-management" | "announcements" | "production-schedule" | "support-management";
+type View = CustomerView | StaffView | ProductionView | SalesView | AdminView;
 
 export default function App() {
   const { user, isLoading } = useAuth();
   const [currentView, setCurrentView] = React.useState<View>("home");
   const [autoOpenUpload, setAutoOpenUpload] = React.useState(false);
   const [menuCategory, setMenuCategory] = React.useState<string | undefined>(undefined);
+  const [isGuest, setIsGuest] = React.useState(() => !useAuthStore.getState().user);
   const cartItems = useCartStore((s) => s.items);
+  const clearCart = useCartStore((s) => s.clearCart);
   const cartCount = cartItems.reduce((sum, i) => sum + i.quantity, 0);
   useCartSync(user?.uid);
 
@@ -62,12 +73,17 @@ export default function App() {
   // Reset view when user role changes
   React.useEffect(() => {
     if (!user) return;
+    setIsGuest(false);
     if (user.role === "admin") setCurrentView("admin");
     else if (user.role === "staff") setCurrentView("staff-dashboard");
+    else if (user.role === "production") setCurrentView("production-dashboard");
+    else if (user.role === "baker") setCurrentView("production-dashboard");
+    else if (user.role === "sales") setCurrentView("sales-orders");
     else setCurrentView("home");
   }, [user?.role]);
 
   const handleLogout = async () => {
+    clearCart();
     await authService.logout();
   };
 
@@ -106,15 +122,17 @@ export default function App() {
     );
   }
 
-  // Show login if not authenticated
-  if (!user) {
-    return <Login />;
+  // Show login if not authenticated and not browsing as guest
+  if (!user && !isGuest) {
+    return <Login onGuestBrowse={() => { setIsGuest(true); setCurrentView("home"); }} />;
   }
 
+  const role = user?.role ?? "guest";
+
   const renderView = () => {
-    if (user.role === "admin") {
+    if (role === "admin") {
       switch (currentView) {
-        case "admin": return <SalesDashboard />;
+        case "admin": return <AdminDashboard />;
         case "order-management": return <OrderManagement />;
         case "menu-management": return <MenuManagement />;
         case "store-settings": return <StoreSettings />;
@@ -122,11 +140,12 @@ export default function App() {
         case "inventory": return <InventoryManagement />;
         case "order-summary": return <OrderSummaryCards />;
         case "staff-management": return <StaffManagement />;
-        case "announcements": return <StaffAnnouncements />;
+        case "announcements": return <AdminDashboard />;
         case "production-schedule": return <ProductionSchedule />;
-        default: return <SalesDashboard />;
+        case "support-management": return <SupportManagement />;
+        default: return <AdminDashboard />;
       }
-    } else if (user.role === "staff") {
+    } else if (role === "staff") {
       switch (currentView) {
         case "staff-dashboard": return <ProductionDashboard />;
         case "order-summary": return <OrderSummaryCards />;
@@ -135,13 +154,39 @@ export default function App() {
         case "production-schedule": return <ProductionSchedule />;
         default: return <ProductionDashboard />;
       }
-    } else {
+    } else if (role === "production") {
       switch (currentView) {
-        case "home": return <CustomerHomepage onNavigate={handleCustomerNavigate} />;
-        case "customize": return <CakeCustomization onGoToCart={() => setCurrentView("cart")} autoOpenUpload={autoOpenUpload} />;
-        case "menu": return <ReadyMadeCakes initialCategory={menuCategory} />;
+        case "production-dashboard": return <ProductionDashboard />;
+        case "order-summary": return <OrderSummaryCards />;
+        case "inventory": return <InventoryManagement />;
+        case "announcements": return <StaffAnnouncements />;
+        case "production-schedule": return <ProductionSchedule />;
+        default: return <ProductionDashboard />;
+      }
+    } else if (role === "baker") {
+      switch (currentView) {
+        case "production-dashboard": return <ProductionDashboard />;
+        case "order-summary": return <OrderSummaryCards />;
+        case "production-schedule": return <ProductionSchedule />;
+        case "announcements": return <StaffAnnouncements />;
+        default: return <ProductionDashboard />;
+      }
+    } else if (role === "sales") {
+      switch (currentView) {
+        case "sales-orders": return <OrderSummaryCards />;
+        case "announcements": return <StaffAnnouncements />;
+        default: return <OrderSummaryCards />;
+      }
+    } else {
+      // customer or guest
+      switch (currentView) {
+        case "home": return <CustomerHomepage onNavigate={handleCustomerNavigate} isGuest={isGuest} />;
+        case "customize": return <CakeCustomization onGoToCart={() => setCurrentView("cart")} autoOpenUpload={autoOpenUpload} isGuest={isGuest} onSignIn={() => setIsGuest(false)} />;
+        case "menu": return <ReadyMadeCakes initialCategory={menuCategory} isGuest={isGuest} onSignIn={() => setIsGuest(false)} />;
         case "orders": return <OrderTracking />;
-        case "cart": return <CartPage onBack={() => setCurrentView("home")} onOrderPlaced={() => setCurrentView("orders")} />;
+        case "cart": return <CartPage onBack={() => setCurrentView("home")} onOrderPlaced={() => setCurrentView("orders")} isGuest={isGuest} onSignIn={() => setIsGuest(false)} />;
+        case "profile": return <ProfilePage onLogout={handleLogout} />;
+        case "support": return <SupportCenter />;
         default: return <CustomerHomepage />;
       }
     }
@@ -153,16 +198,19 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col">
       <Header
-        cartCount={user.role === "customer" ? cartCount : 0}
-        isAdmin={user.role !== "customer"}
-        onLogout={handleLogout}
+        cartCount={role === "customer" ? cartCount : 0}
+        isAdmin={role === "admin" || role === "staff" || role === "production" || role === "sales" || role === "baker"}
+        onLogout={isGuest ? undefined : handleLogout}
         onCartClick={() => setCurrentView("cart")}
+        onProfileClick={() => setCurrentView("profile")}
+        isGuest={isGuest}
+        onSignIn={() => setIsGuest(false)}
       />
 
       {/* Navigation Tabs */}
       <div className="bg-white border-b border-border">
         <div className="container mx-auto px-4">
-          {user.role === "admin" ? (
+          {role === "admin" ? (
             <Tabs value={currentView} onValueChange={(v: string) => setCurrentView(v as View)}>
               <TabsList className="bg-transparent border-b-0 h-12">
                 <TabsTrigger value="admin" className={tabTriggerClass}>
@@ -195,9 +243,12 @@ export default function App() {
                 <TabsTrigger value="production-schedule" className={tabTriggerClass}>
                   <CalendarClock className="w-4 h-4" /> Production Schedule
                 </TabsTrigger>
+                <TabsTrigger value="support-management" className={tabTriggerClass}>
+                  <Headset className="w-4 h-4" /> Support
+                </TabsTrigger>
               </TabsList>
             </Tabs>
-          ) : user.role === "staff" ? (
+          ) : role === "staff" ? (
             <Tabs value={currentView} onValueChange={(v: string) => setCurrentView(v as View)}>
               <TabsList className="bg-transparent border-b-0 h-12">
                 <TabsTrigger value="staff-dashboard" className={tabTriggerClass}>
@@ -217,7 +268,56 @@ export default function App() {
                 </TabsTrigger>
               </TabsList>
             </Tabs>
+          ) : role === "production" ? (
+            <Tabs value={currentView} onValueChange={(v: string) => setCurrentView(v as View)}>
+              <TabsList className="bg-transparent border-b-0 h-12">
+                <TabsTrigger value="production-dashboard" className={tabTriggerClass}>
+                  <LayoutDashboard className="w-4 h-4" /> Kitchen Dashboard
+                </TabsTrigger>
+                <TabsTrigger value="order-summary" className={tabTriggerClass}>
+                  <FileText className="w-4 h-4" /> Orders
+                </TabsTrigger>
+                <TabsTrigger value="inventory" className={tabTriggerClass}>
+                  <BoxIcon className="w-4 h-4" /> Inventory
+                </TabsTrigger>
+                <TabsTrigger value="production-schedule" className={tabTriggerClass}>
+                  <CalendarClock className="w-4 h-4" /> Schedule
+                </TabsTrigger>
+                <TabsTrigger value="announcements" className={tabTriggerClass}>
+                  <Bell className="w-4 h-4" /> Announcements
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          ) : role === "baker" ? (
+            <Tabs value={currentView} onValueChange={(v: string) => setCurrentView(v as View)}>
+              <TabsList className="bg-transparent border-b-0 h-12">
+                <TabsTrigger value="production-dashboard" className={tabTriggerClass}>
+                  <LayoutDashboard className="w-4 h-4" /> Dashboard
+                </TabsTrigger>
+                <TabsTrigger value="order-summary" className={tabTriggerClass}>
+                  <FileText className="w-4 h-4" /> Orders
+                </TabsTrigger>
+                <TabsTrigger value="production-schedule" className={tabTriggerClass}>
+                  <CalendarClock className="w-4 h-4" /> Schedule
+                </TabsTrigger>
+                <TabsTrigger value="announcements" className={tabTriggerClass}>
+                  <Bell className="w-4 h-4" /> Announcements
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          ) : role === "sales" ? (
+            <Tabs value={currentView} onValueChange={(v: string) => setCurrentView(v as View)}>
+              <TabsList className="bg-transparent border-b-0 h-12">
+                <TabsTrigger value="sales-orders" className={tabTriggerClass}>
+                  <FileText className="w-4 h-4" /> Orders
+                </TabsTrigger>
+                <TabsTrigger value="announcements" className={tabTriggerClass}>
+                  <Bell className="w-4 h-4" /> Announcements
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
           ) : (
+            // customer or guest — guests don't see Cart / Track Order tabs
             <Tabs value={currentView} onValueChange={(v: string) => setCurrentView(v as View)}>
               <TabsList className="bg-transparent border-b-0 h-12">
                 <TabsTrigger value="home" className={tabTriggerClass}>
@@ -227,11 +327,18 @@ export default function App() {
                   <Cake className="w-4 h-4" /> Customize
                 </TabsTrigger>
                 <TabsTrigger value="menu" className={tabTriggerClass}>
-                  <Cake className="w-4 h-4" /> Menu
+                  <Cake className="w-4 h-4" /> Archive
                 </TabsTrigger>
-                <TabsTrigger value="orders" className={tabTriggerClass}>
-                  <Package className="w-4 h-4" /> Track Order
-                </TabsTrigger>
+                {!isGuest && (
+                  <TabsTrigger value="orders" className={tabTriggerClass}>
+                    <Package className="w-4 h-4" /> Track Order
+                  </TabsTrigger>
+                )}
+                {!isGuest && (
+                  <TabsTrigger value="support" className={tabTriggerClass}>
+                    <Headset className="w-4 h-4" /> Support
+                  </TabsTrigger>
+                )}
               </TabsList>
             </Tabs>
           )}
@@ -241,7 +348,8 @@ export default function App() {
       {/* Main Content */}
       <main className="flex-1 bg-background">{renderView()}</main>
 
-      {user.role === "customer" && <Footer />}
+      {(role === "customer" || isGuest) && <Footer />}
+      <Toaster />
     </div>
   );
 }

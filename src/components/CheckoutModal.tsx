@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { ref, push, set } from "firebase/database";
+import React, { useEffect, useState } from "react";
+import { ref, push, set, onValue } from "firebase/database";
 import { db } from "../config/firebase";
 import { X, ChevronRight, ChevronLeft, Check, Zap, Upload, ImageIcon } from "lucide-react";
 import type { CartItem } from "../store/cartStore";
@@ -10,6 +10,8 @@ interface CheckoutModalProps {
   rushFee: number;
   total: number;
   downpayment: number;
+  amountDue: number;
+  paymentType: "downpayment" | "full";
   isRushOrder: boolean;
   userId: string;
   userName: string | null;
@@ -54,7 +56,7 @@ const s: Record<string, any> = {
   successWrap: { padding: "40px 24px", textAlign: "center" as const },
 };
 
-export function CheckoutModal({ items, subtotal, rushFee, total, downpayment, isRushOrder, userId, userName, onClose, onSuccess }: CheckoutModalProps) {
+export function CheckoutModal({ items, subtotal, rushFee, total, downpayment, amountDue, paymentType, isRushOrder, userId, userName, onClose, onSuccess }: CheckoutModalProps) {
   const [step, setStep] = useState(1); // 1: details, 2: T&C, 3: payment
   const [name, setName] = useState(userName ?? "");
   const [phone, setPhone] = useState("");
@@ -66,6 +68,22 @@ export function CheckoutModal({ items, subtotal, rushFee, total, downpayment, is
   const [placed, setPlaced] = useState(false);
   const [orderId, setOrderId] = useState("");
   const [paymentProof, setPaymentProof] = useState("");
+  const [gcashQR, setGcashQR] = useState("");
+  const [bdoQR, setBdoQR] = useState("");
+  const [gcashNumber, setGcashNumber] = useState("");
+  const [bdoAccount, setBdoAccount] = useState("");
+  const [lightboxSrc, setLightboxSrc] = useState("");
+
+  useEffect(() => {
+    const unsub = onValue(ref(db, "paymentQR"), (snap) => {
+      const data = snap.val() ?? {};
+      setGcashQR(data.gcashQR ?? "");
+      setBdoQR(data.bdoQR ?? "");
+      setGcashNumber(data.gcashNumber ?? "");
+      setBdoAccount(data.bdoAccount ?? "");
+    });
+    return () => unsub();
+  }, []);
 
   const compressImage = (dataUrl: string): Promise<string> =>
     new Promise((resolve) => {
@@ -88,8 +106,13 @@ export function CheckoutModal({ items, subtotal, rushFee, total, downpayment, is
   const minDate = new Date();
   minDate.setDate(minDate.getDate() + 2);
   const minDateStr = minDate.toISOString().split("T")[0];
+  const maxDate = new Date(minDate.getFullYear(), 11, 31);
+  const maxDateStr = maxDate.toISOString().split("T")[0];
+  const remainingBalance = Math.max(total - downpayment, 0);
 
-  const step1Valid = name.trim() && phone.trim() && pickupDate && pickupTime;
+  const isPickupDateInRange =
+    !!pickupDate && pickupDate >= minDateStr && pickupDate <= maxDateStr;
+  const step1Valid = name.trim() && phone.trim() && isPickupDateInRange && pickupTime;
 
   const placeOrder = async () => {
     setPlacing(true);
@@ -122,6 +145,8 @@ export function CheckoutModal({ items, subtotal, rushFee, total, downpayment, is
         rushFee,
         total,
         downpayment,
+        amountDue,
+        paymentType,
         isRushOrder,
         pickupDate,
         pickupTime,
@@ -157,7 +182,9 @@ export function CheckoutModal({ items, subtotal, rushFee, total, downpayment, is
             <p style={{ fontSize: 13, color: "#8b6f84", marginBottom: 6 }}>Order ID: <strong style={{ color: "#c77db3" }}>{orderId}</strong></p>
             <p style={{ fontSize: 13, color: "#8b6f84", marginBottom: 4 }}>Pickup: <strong style={{ color: "#4a2e42" }}>{pickupDate} at {pickupTime}</strong></p>
             <p style={{ fontSize: 12, color: "#8b6f84", lineHeight: 1.6, margin: "12px 0 24px", background: "rgba(216,159,200,0.1)", borderRadius: 12, padding: "12px 16px" }}>
-              Please send your proof of downpayment (₱{downpayment.toLocaleString()}) via GCash or BDO to confirm your order. We'll reach out shortly.
+              {paymentType === "full"
+                ? `Please send your full payment (₱${amountDue.toLocaleString()}) via GCash or BDO to confirm your order. We'll reach out shortly.`
+                : `Please send your 50% deposit (₱${amountDue.toLocaleString()}) via GCash or BDO to confirm your order. The remaining balance is due on pickup.`}
             </p>
             <button style={s.primaryBtn} onClick={onSuccess}>
               Track My Order <ChevronRight size={16} />
@@ -217,8 +244,10 @@ export function CheckoutModal({ items, subtotal, rushFee, total, downpayment, is
                       <span style={{ fontWeight: 700, color: "#4a2e42" }}>₱{total.toLocaleString()}</span>
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", background: "rgba(199,125,179,0.08)", borderRadius: 10, padding: "8px 10px" }}>
-                      <span style={{ fontSize: 13, color: "#c77db3", fontWeight: 600 }}>Downpayment (50%)</span>
-                      <span style={{ fontWeight: 800, color: "#c77db3", fontSize: 15 }}>₱{downpayment.toLocaleString()}</span>
+                      <span style={{ fontSize: 13, color: "#c77db3", fontWeight: 600 }}>
+                        {paymentType === "full" ? "Full Payment" : "Deposit (50%)"}
+                      </span>
+                      <span style={{ fontWeight: 800, color: "#c77db3", fontSize: 15 }}>₱{amountDue.toLocaleString()}</span>
                     </div>
                   </div>
 
@@ -237,8 +266,10 @@ export function CheckoutModal({ items, subtotal, rushFee, total, downpayment, is
                   <p style={s.sectionTitle}>Pickup Schedule</p>
                   <div style={{ marginBottom: 12 }}>
                     <label style={s.label}>Pickup Date</label>
-                    <input style={s.input} type="date" value={pickupDate} min={minDateStr} onChange={e => setPickupDate(e.target.value)} />
-                    <p style={{ fontSize: 11, color: "#8b6f84", marginTop: 5 }}>Orders require at least 2 days lead time</p>
+                    <input style={s.input} type="date" value={pickupDate} min={minDateStr} max={maxDateStr} onChange={e => setPickupDate(e.target.value)} />
+                    <p style={{ fontSize: 11, color: "#8b6f84", marginTop: 5 }}>
+                      Orders require at least 2 days lead time and can only be booked within this year
+                    </p>
                   </div>
                   <div>
                     <label style={s.label}>Pickup Time</label>
@@ -284,34 +315,56 @@ export function CheckoutModal({ items, subtotal, rushFee, total, downpayment, is
               {/* ── Step 3: Payment ── */}
               {step === 3 && (
                 <div>
-                  <p style={s.sectionTitle}>Pay Downpayment</p>
+                  <p style={s.sectionTitle}>{paymentType === "full" ? "Full Payment" : "Pay 50% Deposit"}</p>
                   <div style={{ background: "rgba(199,125,179,0.08)", borderRadius: 14, padding: "14px 16px", marginBottom: 16, textAlign: "center" }}>
-                    <p style={{ margin: 0, fontSize: 12, color: "#8b6f84" }}>Amount due now (50%)</p>
-                    <p style={{ margin: "4px 0 0", fontSize: 28, fontWeight: 800, color: "#c77db3", fontFamily: "Georgia, serif" }}>₱{downpayment.toLocaleString()}</p>
+                    <p style={{ margin: 0, fontSize: 12, color: "#8b6f84" }}>
+                      {paymentType === "full" ? "Total amount due" : "Amount due now (50% deposit)"}
+                    </p>
+                    <p style={{ margin: "4px 0 0", fontSize: 28, fontWeight: 800, color: "#c77db3", fontFamily: "Georgia, serif" }}>₱{amountDue.toLocaleString()}</p>
+                    {paymentType === "downpayment" && (
+                      <p style={{ margin: "4px 0 0", fontSize: 11, color: "#8b6f84" }}>Remaining ₱{remainingBalance.toLocaleString()} due on pickup</p>
+                    )}
                   </div>
+
+                  {/* Lightbox */}
+                  {lightboxSrc && (
+                    <div
+                      onClick={() => setLightboxSrc("")}
+                      style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-out" }}
+                    >
+                      <img src={lightboxSrc} alt="QR Full" style={{ maxWidth: "90vw", maxHeight: "90vh", objectFit: "contain", borderRadius: 16, boxShadow: "0 8px 60px rgba(0,0,0,0.6)" }} />
+                      <button onClick={() => setLightboxSrc("")} style={{ position: "absolute", top: 20, right: 24, background: "rgba(255,255,255,0.15)", border: "none", borderRadius: "50%", width: 40, height: 40, fontSize: 20, color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+                    </div>
+                  )}
 
                   {/* GCash */}
                   <div style={{ border: "1.5px solid rgba(59,130,246,0.3)", borderRadius: 16, padding: "14px 16px", background: "rgba(59,130,246,0.04)", marginBottom: 12 }}>
                     <p style={{ margin: "0 0 10px", fontWeight: 700, fontSize: 13, color: "#1d4ed8" }}>GCash</p>
-                    <div style={{ background: "#fff", borderRadius: 12, padding: 12, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 10 }}>
-                      <div style={{ width: 120, height: 120, background: "linear-gradient(135deg,#dbeafe,#bfdbfe)", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", border: "3px solid #93c5fd" }}>
-                        <div style={{ textAlign: "center" }}>
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 8px)", gap: 2, marginBottom: 6 }}>
-                            {Array.from({ length: 64 }).map((_, i) => (
-                              <div key={i} style={{ width: 8, height: 8, background: (i * 7 + i) % 3 === 0 ? "#1e40af" : "#fff", borderRadius: 1 }} />
-                            ))}
-                          </div>
-                          <p style={{ margin: 0, fontSize: 9, fontWeight: 700, color: "#1e40af" }}>GCASH QR</p>
-                        </div>
+                    {gcashQR ? (
+                      <div onClick={() => setLightboxSrc(gcashQR)} style={{ background: "#fff", borderRadius: 12, padding: 10, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 10, cursor: "zoom-in" }} title="Tap to enlarge">
+                        <img src={gcashQR} alt="GCash QR" style={{ width: 160, height: 160, objectFit: "contain", borderRadius: 8 }} />
                       </div>
-                    </div>
-                    <p style={{ margin: 0, fontSize: 12, color: "#1d4ed8" }}><strong>Account:</strong> Cake with Joy · 09XX XXX XXXX</p>
+                    ) : (
+                      <div style={{ background: "rgba(59,130,246,0.08)", borderRadius: 12, padding: "16px", textAlign: "center", marginBottom: 10 }}>
+                        <p style={{ margin: 0, fontSize: 12, color: "#1d4ed8" }}>QR code not yet configured.</p>
+                      </div>
+                    )}
+                    {gcashNumber && <p style={{ margin: 0, fontSize: 12, color: "#1d4ed8" }}><strong>Account:</strong> Cake with Joy · {gcashNumber}</p>}
                   </div>
 
                   {/* BDO */}
                   <div style={{ border: "1.5px solid rgba(234,88,12,0.3)", borderRadius: 16, padding: "14px 16px", background: "rgba(234,88,12,0.04)", marginBottom: 20 }}>
                     <p style={{ margin: "0 0 10px", fontWeight: 700, fontSize: 13, color: "#c2410c" }}>BDO Bank Transfer</p>
-                    <p style={{ margin: 0, fontSize: 12, color: "#c2410c" }}><strong>Account:</strong> Cake with Joy · 0123 4567 8901</p>
+                    {bdoQR ? (
+                      <div onClick={() => setLightboxSrc(bdoQR)} style={{ background: "#fff", borderRadius: 12, padding: 10, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 10, cursor: "zoom-in" }} title="Tap to enlarge">
+                        <img src={bdoQR} alt="BDO QR" style={{ width: 160, height: 160, objectFit: "contain", borderRadius: 8 }} />
+                      </div>
+                    ) : (
+                      <div style={{ background: "rgba(234,88,12,0.08)", borderRadius: 12, padding: "16px", textAlign: "center", marginBottom: 10 }}>
+                        <p style={{ margin: 0, fontSize: 12, color: "#c2410c" }}>QR code not yet configured.</p>
+                      </div>
+                    )}
+                    {bdoAccount && <p style={{ margin: 0, fontSize: 12, color: "#c2410c" }}><strong>Account:</strong> Cake with Joy · {bdoAccount}</p>}
                   </div>
 
                   {/* Payment proof upload */}

@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { ref, onValue } from "firebase/database";
+import { db } from "../config/firebase";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -32,6 +34,7 @@ interface Order {
   total: string;
   orderDate: Date;
   theme?: string;
+  cakeImage?: string;
 }
 
 // Production stages - these ARE the statuses
@@ -41,116 +44,6 @@ interface OrderWithStage extends Order {
   stage: ProductionStage;
 }
 
-// Mock orders with production stages
-const MOCK_PRODUCTION_ORDERS: OrderWithStage[] = [
-  {
-    id: "#12345",
-    customer: "Sarah Johnson",
-    salesAgent: "Sales 1",
-    cakeType: "Fondant Wedding Cake",
-    size: '3-Tier (10"x6" + 8"x6" + 6"x6")',
-    flavor: "Vanilla with Raspberry Filling",
-    specialRequirements: "White and gold color scheme, fresh flowers on top",
-    deliveryDate: new Date(2026, 1, 15),
-    total: "₱11,000",
-    orderDate: new Date(2026, 1, 5),
-    theme: "Wedding Elegance",
-    stage: "pending",
-  },
-  {
-    id: "#12346",
-    customer: "Mike Chen",
-    salesAgent: "Sales 2",
-    cakeType: "Birthday Celebration",
-    size: '8"x4"',
-    flavor: "Chocolate Fudge",
-    specialRequirements: "Happy Birthday message, number 7 candle",
-    deliveryDate: new Date(2026, 1, 14),
-    total: "₱1,800",
-    orderDate: new Date(2026, 1, 7),
-    theme: "Birthday",
-    stage: "in-production",
-  },
-  {
-    id: "#12347",
-    customer: "Emily Davis",
-    salesAgent: "Sales 1",
-    cakeType: "Red Velvet Romance",
-    size: '8"x4"',
-    flavor: "Red Velvet with Cream Cheese",
-    specialRequirements: "Heart-shaped decoration, rose petals",
-    deliveryDate: new Date(2026, 1, 18),
-    total: "₱2,000",
-    orderDate: new Date(2026, 1, 10),
-    stage: "in-production",
-  },
-  {
-    id: "#12348",
-    customer: "James Wilson",
-    salesAgent: "Sales 3",
-    cakeType: "Naked Cake",
-    size: '2-Tier (8"x4" + 6"x4")',
-    flavor: "Lemon with Blueberry",
-    specialRequirements: "Minimal decoration, fresh berries",
-    deliveryDate: new Date(2026, 1, 20),
-    total: "₱6,500",
-    orderDate: new Date(2026, 1, 8),
-    stage: "quality-check",
-  },
-  {
-    id: "#12349",
-    customer: "Lisa Anderson",
-    salesAgent: "Sales 2",
-    cakeType: "Ube Delight",
-    size: '8"x4"',
-    flavor: "Ube with Coconut Cream",
-    specialRequirements: "Purple gradient frosting",
-    deliveryDate: new Date(2026, 1, 22),
-    total: "₱1,900",
-    orderDate: new Date(2026, 1, 12),
-    stage: "quality-check",
-  },
-  {
-    id: "#12350",
-    customer: "David Brown",
-    salesAgent: "Sales 1",
-    cakeType: "Chocolate Dream",
-    size: '6"x4"',
-    flavor: "Triple Chocolate",
-    specialRequirements: "Extra chocolate ganache",
-    deliveryDate: new Date(2026, 1, 25),
-    total: "₱1,700",
-    orderDate: new Date(2026, 1, 15),
-    stage: "ready",
-  },
-  {
-    id: "#12351",
-    customer: "Anna Martinez",
-    salesAgent: "Sales 3",
-    cakeType: "Fondant Birthday",
-    size: '1-Tier (8"x6")',
-    flavor: "Strawberry Shortcake",
-    specialRequirements: "Princess theme with edible glitter",
-    deliveryDate: new Date(2026, 1, 16),
-    total: "₱5,400",
-    orderDate: new Date(2026, 1, 6),
-    theme: "Birthday",
-    stage: "ready",
-  },
-  {
-    id: "#12340",
-    customer: "Robert Lee",
-    salesAgent: "Sales 2",
-    cakeType: "Naked Cake",
-    size: '1-Tier (8"x4")',
-    flavor: "Carrot Cake with Cream Cheese",
-    specialRequirements: "Walnut topping",
-    deliveryDate: new Date(2026, 1, 10),
-    total: "₱3,500",
-    orderDate: new Date(2026, 1, 1),
-    stage: "completed",
-  },
-];
 
 const STAGE_CONFIG = {
   pending: {
@@ -186,9 +79,38 @@ const STAGE_CONFIG = {
 };
 
 export function ProductionDashboard() {
-  const [orders, setOrders] = useState<OrderWithStage[]>(MOCK_PRODUCTION_ORDERS);
+  const [orders, setOrders] = useState<OrderWithStage[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<OrderWithStage | null>(null);
   const [showOrderDialog, setShowOrderDialog] = useState(false);
+
+  useEffect(() => {
+    const unsub = onValue(ref(db, "allOrders"), (snap) => {
+      const data = snap.val();
+      if (!data) { setOrders([]); setLoading(false); return; }
+      const list: OrderWithStage[] = Object.entries(data).map(([key, val]: [string, any]) => {
+        const firstItem = Array.isArray(val.items) ? val.items[0] : null;
+        return {
+          id: key,
+          customer: val.customerName ?? "",
+          salesAgent: val.salesAgent ?? "",
+          cakeType: val.cakeType ?? (firstItem?.name ?? ""),
+          size: val.size ?? (firstItem?.size ?? ""),
+          flavor: val.flavor ?? (firstItem?.flavor ?? ""),
+          specialRequirements: val.specialRequirements ?? val.notes ?? "",
+          deliveryDate: val.pickupDate ? new Date(val.pickupDate) : new Date(),
+          total: val.total != null ? `₱${val.total}` : "",
+          orderDate: val.createdAt ? new Date(val.createdAt) : new Date(),
+          theme: val.theme,
+          cakeImage: firstItem?.cakeImage ?? val.cakeImage ?? "",
+          stage: (val.status as ProductionStage) ?? "pending",
+        };
+      });
+      setOrders(list);
+      setLoading(false);
+    }, () => { setOrders([]); setLoading(false); });
+    return () => unsub();
+  }, []);
 
   const getOrdersByStage = (stage: ProductionStage) => {
     return orders.filter((order) => order.stage === stage);
@@ -240,6 +162,16 @@ export function ProductionDashboard() {
       color: "text-green-600",
     },
   ];
+
+  if (loading) {
+    return (
+      <div className="container mx-auto px-4 py-8" style={{ background: "#F4E9F2" }}>
+        <div className="flex items-center justify-center min-h-[300px]">
+          <p className="text-muted-foreground text-lg">Loading orders…</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -400,6 +332,21 @@ export function ProductionDashboard() {
 
           {selectedOrder && (
             <div className="space-y-6 pt-4">
+              {selectedOrder.cakeImage && (
+                <Card className="border-2">
+                  <CardHeader>
+                    <CardTitle className="text-base">Customer Design Reference</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <img
+                      src={selectedOrder.cakeImage}
+                      alt={`Design reference for ${selectedOrder.cakeType}`}
+                      className="w-full rounded-xl border object-contain max-h-[360px] bg-muted/30"
+                    />
+                  </CardContent>
+                </Card>
+              )}
+
               {/* Status Badge */}
               <div className="flex items-center justify-between">
                 <Badge className={STAGE_CONFIG[selectedOrder.stage].badge} variant="secondary">
