@@ -48,10 +48,14 @@ import {
   AlertCircle,
   ShieldCheck,
   Percent,
-  Trash2,
   Printer,
   Share2,
   Circle,
+  ArrowUpDown,
+  Archive,
+  RotateCcw,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 
 type UserRole = "baker" | "sales" | "admin";
@@ -287,8 +291,9 @@ export function OrderSummaryCards() {
   const [userRole, setUserRole] = useState<UserRole>(defaultViewRole);
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [clearTarget, setClearTarget] = useState<any | "all-completed" | "all-declined" | null>(null);
-  const [clearing, setClearing] = useState(false);
+  const [archiveTarget, setArchiveTarget] = useState<any | "all-completed" | "all-declined" | null>(null);
+  const [archiving, setArchiving] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [salesUpdateTarget, setSalesUpdateTarget] = useState<any | null>(null);
   const [salesUpdating, setSalesUpdating] = useState(false);
   const [salesRejecting, setSalesRejecting] = useState(false);
@@ -299,6 +304,10 @@ export function OrderSummaryCards() {
     timeSlot: "morning",
     estimatedCompletion: "",
   });
+  const [pickupSort, setPickupSort] = useState<"asc" | "desc">("asc");
+  const [pageSize, setPageSize] = useState(6);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSizeInput, setPageSizeInput] = useState("6");
 
   useEffect(() => {
     const unsub = onValue(ref(db, "allOrders"), (snap) => {
@@ -363,15 +372,17 @@ export function OrderSummaryCards() {
           pickupDate: val.pickupDate ?? "",
           pickupTime: val.pickupTime ?? "",
         };
-      }).filter((order) => !order.clearedByAdmin);
+      });
       setOrders(list);
       setLoading(false);
     }, () => { setOrders([]); setLoading(false); });
     return () => unsub();
   }, []);
 
-  const completedOrders = orders.filter((order) => order.status === "completed");
-  const declinedOrders = orders.filter((order) => order.status === "declined");
+  const activeOrders = orders.filter((order) => !order.clearedByAdmin);
+  const archivedOrders = orders.filter((order) => order.clearedByAdmin);
+  const completedOrders = activeOrders.filter((order) => order.status === "completed");
+  const declinedOrders = activeOrders.filter((order) => order.status === "declined");
 
   const syncOrderUpdate = async (order: any, payload: Record<string, unknown>) => {
     await update(ref(db, `allOrders/${order.id}`), payload);
@@ -779,26 +790,34 @@ export function OrderSummaryCards() {
     }
   };
 
-  const confirmClear = async () => {
-    if (!clearTarget) return;
-    setClearing(true);
+  const confirmArchive = async () => {
+    if (!archiveTarget) return;
+    setArchiving(true);
     try {
-      if (clearTarget === "all-completed") {
+      if (archiveTarget === "all-completed") {
         await Promise.all(
           completedOrders.map((order) => update(ref(db, `allOrders/${order.id}`), { clearedByAdmin: true }))
         );
-      } else if (clearTarget === "all-declined") {
+      } else if (archiveTarget === "all-declined") {
         await Promise.all(
           declinedOrders.map((order) => update(ref(db, `allOrders/${order.id}`), { clearedByAdmin: true }))
         );
       } else {
-        await update(ref(db, `allOrders/${clearTarget.id}`), { clearedByAdmin: true });
+        await update(ref(db, `allOrders/${archiveTarget.id}`), { clearedByAdmin: true });
       }
-      setClearTarget(null);
+      setArchiveTarget(null);
     } catch (error) {
-      console.error("Failed to clear order(s)", error);
+      console.error("Failed to archive order(s)", error);
     } finally {
-      setClearing(false);
+      setArchiving(false);
+    }
+  };
+
+  const unarchiveOrder = async (order: any) => {
+    try {
+      await update(ref(db, `allOrders/${order.id}`), { clearedByAdmin: false });
+    } catch (error) {
+      console.error("Failed to unarchive order", error);
     }
   };
 
@@ -821,14 +840,48 @@ export function OrderSummaryCards() {
     );
   };
 
-  const filteredOrders = orders.filter((order) => {
-    const matchesSearch =
-      order.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      order.customer.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      order.cakeDetails.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === "all" || order.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+  const filteredOrders = activeOrders
+    .filter((order) => {
+      const matchesSearch =
+        order.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        order.customer.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        order.cakeDetails.name.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesStatus = statusFilter === "all" || order.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    })
+    .sort((a, b) => {
+      const toMs = (date: string, time: string) => {
+        if (!date) return Infinity;
+        const base = new Date(`${date}T00:00:00`);
+        if (!base.getTime()) return Infinity;
+        if (time) {
+          const t = new Date(`${date} ${time}`);
+          if (!isNaN(t.getTime())) return t.getTime();
+        }
+        return base.getTime();
+      };
+      const da = toMs(a.pickupDate, a.pickupTime);
+      const db2 = toMs(b.pickupDate, b.pickupTime);
+      return pickupSort === "asc" ? da - db2 : db2 - da;
+    });
+
+  // Reset to page 1 whenever filters/sort change
+  useEffect(() => { setCurrentPage(1); }, [searchQuery, statusFilter, pickupSort, showArchived]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredOrders.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedOrders = filteredOrders.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  const goToPage = (p: number) => setCurrentPage(Math.max(1, Math.min(p, totalPages)));
+
+  const applyPageSize = (raw: string) => {
+    const n = parseInt(raw, 10);
+    if (!isNaN(n) && n >= 1) {
+      setPageSize(n);
+      setPageSizeInput(String(n));
+      setCurrentPage(1);
+    }
+  };
 
   if (loading) {
     return (
@@ -884,19 +937,19 @@ export function OrderSummaryCards() {
 
       {/* Filters */}
       <div className="flex flex-col gap-4 mb-6">
-        {systemRole === "admin" && (completedOrders.length > 0 || declinedOrders.length > 0) && (
+        {systemRole === "admin" && !showArchived && (completedOrders.length > 0 || declinedOrders.length > 0) && (
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-white/70 p-3">
-            <span className="text-sm font-medium text-muted-foreground">Admin cleanup:</span>
+            <span className="text-sm font-medium text-muted-foreground">Admin archive:</span>
             {completedOrders.length > 0 && (
               <Button
                 variant="outline"
                 size="sm"
                 className="gap-2 border-violet-200 text-violet-700 hover:bg-violet-50"
-                onClick={() => setClearTarget("all-completed")}
-                disabled={clearing}
+                onClick={() => setArchiveTarget("all-completed")}
+                disabled={archiving}
               >
-                <Trash2 className="w-4 h-4" />
-                Clear {completedOrders.length} completed
+                <Archive className="w-4 h-4" />
+                Archive {completedOrders.length} completed
               </Button>
             )}
             {declinedOrders.length > 0 && (
@@ -904,11 +957,11 @@ export function OrderSummaryCards() {
                 variant="outline"
                 size="sm"
                 className="gap-2 border-red-200 text-red-700 hover:bg-red-50"
-                onClick={() => setClearTarget("all-declined")}
-                disabled={clearing}
+                onClick={() => setArchiveTarget("all-declined")}
+                disabled={archiving}
               >
-                <Trash2 className="w-4 h-4" />
-                Clear {declinedOrders.length} declined
+                <Archive className="w-4 h-4" />
+                Archive {declinedOrders.length} declined
               </Button>
             )}
           </div>
@@ -936,12 +989,89 @@ export function OrderSummaryCards() {
             <SelectItem value="completed">Completed</SelectItem>
           </SelectContent>
         </Select>
+        {!showArchived && (
+          <Button
+            variant="outline"
+            className="gap-2 whitespace-nowrap"
+            onClick={() => setPickupSort((s) => (s === "asc" ? "desc" : "asc"))}
+            title="Sort by pickup date"
+          >
+            <ArrowUpDown className="w-4 h-4" />
+            Pickup: {pickupSort === "asc" ? "Earliest first" : "Latest first"}
+          </Button>
+        )}
+        {systemRole === "admin" && (
+          <Button
+            variant={showArchived ? "default" : "outline"}
+            className={`gap-2 whitespace-nowrap ${showArchived ? "bg-primary hover:bg-primary/90" : ""}`}
+            onClick={() => setShowArchived((v) => !v)}
+          >
+            <Archive className="w-4 h-4" />
+            {showArchived ? "Active Orders" : `Archive (${archivedOrders.length})`}
+          </Button>
+        )}
         </div>
       </div>
 
+      {/* Archived Orders View */}
+      {showArchived && (
+        <div>
+          {archivedOrders.length === 0 ? (
+            <Card className="p-12">
+              <div className="text-center space-y-3">
+                <Archive className="w-12 h-12 mx-auto text-muted-foreground" />
+                <h3>No Archived Orders</h3>
+                <p className="text-muted-foreground">Archived orders will appear here</p>
+              </div>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground px-1">
+                <Archive className="w-4 h-4" />
+                <span>{archivedOrders.length} archived order{archivedOrders.length !== 1 ? "s" : ""} — all data preserved</span>
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {archivedOrders.map((order) => (
+                  <Card key={order.id} className="overflow-hidden opacity-75 border-dashed">
+                    <CardHeader className="pb-3 pt-4 bg-muted/30">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <CardTitle className="mb-1 text-muted-foreground">{order.customer.name || "Unknown Customer"}</CardTitle>
+                          <p className="text-sm text-muted-foreground">{order.cakeDetails.name || "Custom Order"}</p>
+                          <p className="text-xs text-muted-foreground">{order.date}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {getStatusBadge(order.status)}
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="pt-3 space-y-2">
+                      <div className="text-sm text-muted-foreground space-y-1">
+                        <div className="flex items-center gap-2"><User className="w-3 h-3" />{order.customer.name}</div>
+                        <div className="flex items-center gap-2"><Phone className="w-3 h-3" />{order.customer.phone}</div>
+                        <div className="flex items-center gap-2"><Calendar className="w-3 h-3" />Pickup: {order.pickupDate} at {order.pickupTime}</div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-2 w-full mt-2"
+                        onClick={() => unarchiveOrder(order)}
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        Unarchive
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Order Cards Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {filteredOrders.map((order) => (
+      {!showArchived && <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {paginatedOrders.map((order) => (
           <Card key={order.id} className="overflow-hidden hover:shadow-lg transition-shadow">
             <CardHeader className="bg-gradient-to-r from-secondary/20 to-primary/20 pb-3 pt-4">
               <div className="flex items-start justify-between">
@@ -1271,20 +1401,109 @@ export function OrderSummaryCards() {
                         ? "border-red-200 text-red-700 hover:bg-red-50"
                         : "border-violet-200 text-violet-700 hover:bg-violet-50"
                     }`}
-                    onClick={() => setClearTarget(order)}
-                    disabled={clearing}
+                    onClick={() => setArchiveTarget(order)}
+                    disabled={archiving}
                   >
-                    <Trash2 className="w-4 h-4" />
-                    Clear
+                    <Archive className="w-4 h-4" />
+                    Archive
                   </Button>
                 )}
               </div>
             </CardContent>
           </Card>
         ))}
-      </div>
+      </div>}
 
-      {filteredOrders.length === 0 && (
+      {/* Pagination bar */}
+      {!showArchived && filteredOrders.length > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 px-1">
+          {/* Left: count + rows per page */}
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            <span>
+              {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filteredOrders.length)} of {filteredOrders.length} orders
+            </span>
+            <div className="flex items-center gap-2">
+              <span>Cards per page:</span>
+              <div className="flex items-center gap-1">
+                {[4, 6, 10, 20].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => { setPageSize(n); setPageSizeInput(String(n)); setCurrentPage(1); }}
+                    className={`px-2 py-0.5 rounded text-xs font-medium border transition-colors ${
+                      pageSize === n
+                        ? "bg-primary text-white border-primary"
+                        : "border-border hover:border-primary hover:text-primary"
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+                <Input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={pageSizeInput}
+                  onChange={(e) => setPageSizeInput(e.target.value)}
+                  onBlur={(e) => applyPageSize(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && applyPageSize(pageSizeInput)}
+                  className="w-16 h-7 text-xs text-center px-1"
+                  placeholder="Custom"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Right: prev / page pills / next */}
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => goToPage(safePage - 1)}
+              disabled={safePage === 1}
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </Button>
+
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter((p) => p === 1 || p === totalPages || Math.abs(p - safePage) <= 1)
+              .reduce<(number | "…")[]>((acc, p, idx, arr) => {
+                if (idx > 0 && (p as number) - (arr[idx - 1] as number) > 1) acc.push("…");
+                acc.push(p);
+                return acc;
+              }, [])
+              .map((p, i) =>
+                p === "…" ? (
+                  <span key={`ellipsis-${i}`} className="px-1 text-muted-foreground text-sm">…</span>
+                ) : (
+                  <button
+                    key={p}
+                    onClick={() => goToPage(p as number)}
+                    className={`h-8 w-8 rounded-md text-sm font-medium border transition-colors ${
+                      safePage === p
+                        ? "bg-primary text-white border-primary"
+                        : "border-border hover:border-primary hover:text-primary"
+                    }`}
+                  >
+                    {p}
+                  </button>
+                )
+              )}
+
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => goToPage(safePage + 1)}
+              disabled={safePage === totalPages}
+            >
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {!showArchived && filteredOrders.length === 0 && (
         <Card className="p-12">
           <div className="text-center space-y-3">
             <AlertCircle className="w-12 h-12 mx-auto text-muted-foreground" />
@@ -1296,22 +1515,22 @@ export function OrderSummaryCards() {
         </Card>
       )}
 
-      <AlertDialog open={!!clearTarget} onOpenChange={(open) => !open && !clearing && setClearTarget(null)}>
+      <AlertDialog open={!!archiveTarget} onOpenChange={(open) => !open && !archiving && setArchiveTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Clear order cards?</AlertDialogTitle>
+            <AlertDialogTitle>Archive order?</AlertDialogTitle>
             <AlertDialogDescription>
-              {clearTarget === "all-completed" && "This will remove all completed orders from the admin summary cards view."}
-              {clearTarget === "all-declined" && "This will remove all declined orders from the admin summary cards view."}
-              {clearTarget && clearTarget !== "all-completed" && clearTarget !== "all-declined" && (
-                <>This will remove this {clearTarget.status} order from the admin summary cards view.</>
+              {archiveTarget === "all-completed" && "This will archive all completed orders. Data is preserved and can be restored from the Archive view."}
+              {archiveTarget === "all-declined" && "This will archive all declined orders. Data is preserved and can be restored from the Archive view."}
+              {archiveTarget && archiveTarget !== "all-completed" && archiveTarget !== "all-declined" && (
+                <>This will archive this {archiveTarget.status} order. All data is preserved and can be restored from the Archive view.</>
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={clearing}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmClear} disabled={clearing}>
-              {clearing ? "Clearing..." : "Clear orders"}
+            <AlertDialogCancel disabled={archiving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmArchive} disabled={archiving}>
+              {archiving ? "Archiving..." : "Yes, archive"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

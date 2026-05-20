@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ref, onValue, update } from "firebase/database";
 import { db } from "../config/firebase";
 import { useAuthStore } from "../store/authStore";
-import { Package, CheckCircle, Flame, MapPin, Upload, ImageIcon, Search, Calendar } from "lucide-react";
+import { Package, CheckCircle, Flame, MapPin, Upload, ImageIcon, Search, Calendar, Printer } from "lucide-react";
 import { toast } from "sonner";
 
 const compressImage = (dataUrl: string): Promise<string> =>
@@ -98,6 +98,126 @@ function getRemainingBalance(order: Order): number {
   return Math.max(order.total - inferredDownpayment, 0);
 }
 
+function esc(s: string | number) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function printCustomerReceipt(order: Order) {
+  const win = window.open("", "_blank", "width=520,height=760");
+  if (!win) return;
+  const paymentType = normalizePaymentType(order);
+  const remaining = getRemainingBalance(order);
+  const itemsHtml = (order.items ?? [])
+    .map((it) => `<tr><td>${esc(it.name)}</td><td style="text-align:center">${esc(it.quantity)}</td><td style="text-align:right">₱${(it.price * it.quantity).toLocaleString()}</td></tr>`)
+    .join("");
+  const statusLabels: Record<string, string> = {
+    confirmed: "Order Confirmed", baking: "Baking", quality_check: "Quality Check",
+    ready: "Ready for Pickup", completed: "Completed",
+  };
+  const statusLabel = statusLabels[order.status] ?? order.status;
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt – ${esc(order.orderId.slice(0, 10))}</title><style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:#fdf5fb;color:#2d1b2e;font-size:13px}
+    .page{max-width:420px;margin:0 auto;padding:0;background:#fff;border-radius:0;box-shadow:0 0 40px rgba(0,0,0,.08)}
+    .header{background:linear-gradient(135deg,#4a2e42 0%,#7c3f6c 100%);padding:28px 28px 20px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .header h1{color:#fff;font-size:22px;font-weight:700;letter-spacing:.02em}
+    .header p{color:rgba(255,255,255,.75);font-size:12px;margin-top:4px}
+    .accent{height:4px;background:linear-gradient(90deg,#c77db3,#e8a8d8);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .body{padding:24px 28px}
+    .section-label{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#c77db3;margin-bottom:8px}
+    .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px}
+    .info-cell label{display:block;font-size:10px;color:#8b6f84;margin-bottom:2px}
+    .info-cell span{font-size:13px;font-weight:600;color:#4a2e42}
+    .divider{border:none;border-top:1px solid #f0d8ea;margin:16px 0}
+    table{width:100%;border-collapse:collapse;margin-bottom:10px}
+    th{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#8b6f84;padding:6px 0;border-bottom:1px solid #f0d8ea;text-align:left}
+    th:last-child,td:last-child{text-align:right}
+    th:nth-child(2),td:nth-child(2){text-align:center}
+    td{padding:7px 0;font-size:13px;border-bottom:1px solid rgba(216,159,200,.12)}
+    .totals-box{background:#fdf5fb;border-radius:12px;padding:14px 16px;margin:12px 0;border:1px solid #f0d8ea}
+    .totals-row{display:flex;justify-content:space-between;font-size:13px;color:#4a2e42;margin-bottom:5px}
+    .totals-row.total{font-size:16px;font-weight:800;color:#4a2e42;border-top:1.5px solid #d89fc8;padding-top:8px;margin-top:4px}
+    .status-badge{display:inline-block;padding:4px 12px;border-radius:100px;font-size:11px;font-weight:700;background:rgba(59,130,246,.1);color:#1d4ed8;border:1px solid rgba(59,130,246,.25)}
+    .pickup-box{background:rgba(216,159,200,.08);border:1px solid rgba(216,159,200,.3);border-radius:12px;padding:14px 16px;margin-top:12px}
+    .pickup-box .label{font-size:10px;color:#8b6f84;margin-bottom:2px}
+    .pickup-box .val{font-size:13px;font-weight:600;color:#4a2e42}
+    .balance-box{background:rgba(199,125,179,.07);border:1.5px solid rgba(199,125,179,.3);border-radius:12px;padding:14px 16px;margin-top:12px}
+    .paid-box{background:rgba(34,197,94,.07);border:1.5px solid rgba(34,197,94,.3);border-radius:12px;padding:14px 16px;margin-top:12px}
+    .footer{padding:18px 28px;background:#f9f0f7;border-top:2px solid #4a2e42;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .footer p{font-size:11px;color:#8b6f84;line-height:1.7}
+    .print-btn{display:flex;align-items:center;gap:8px;margin:16px auto 0;padding:10px 24px;background:linear-gradient(135deg,#4a2e42,#7c3f6c);color:#fff;border:none;border-radius:100px;font-size:13px;font-weight:700;cursor:pointer;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    @media print{.print-btn{display:none!important}.page{box-shadow:none}}
+  </style></head><body>
+  <div class="page">
+    <div class="header">
+      <h1>🎂 Cake with Joy</h1>
+      <p>Order Confirmation Receipt</p>
+    </div>
+    <div class="accent"></div>
+    <div class="body">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+        <div>
+          <div style="font-size:10px;color:#8b6f84;margin-bottom:2px">Order ID</div>
+          <div style="font-family:monospace;font-size:13px;color:#4a2e42;font-weight:600">${esc(order.orderId.slice(0, 10))}…</div>
+        </div>
+        <span class="status-badge">${esc(statusLabel)}</span>
+      </div>
+
+      <div class="section-label">Customer Details</div>
+      <div class="info-grid">
+        <div class="info-cell"><label>Name</label><span>${esc(order.customerName)}</span></div>
+        <div class="info-cell"><label>Phone</label><span>${esc(order.customerPhone)}</span></div>
+        <div class="info-cell"><label>Order Date</label><span>${esc(new Date(order.createdAt).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }))}</span></div>
+        ${order.isRushOrder ? `<div class="info-cell"><label>Type</label><span style="color:#c77db3">⚡ Rush Order</span></div>` : ""}
+      </div>
+
+      <hr class="divider">
+      <div class="section-label">Items Ordered</div>
+      <table>
+        <thead><tr><th>Item</th><th>Qty</th><th>Amount</th></tr></thead>
+        <tbody>
+          ${itemsHtml}
+          ${order.isRushOrder ? `<tr><td style="color:#c77db3">⚡ Rush Fee</td><td></td><td style="text-align:right;color:#c77db3">+₱${order.rushFee.toLocaleString()}</td></tr>` : ""}
+        </tbody>
+      </table>
+
+      <div class="totals-box">
+        <div class="totals-row"><span>Subtotal</span><span>₱${order.subtotal.toLocaleString()}</span></div>
+        ${order.isRushOrder ? `<div class="totals-row"><span>Rush Fee</span><span>+₱${order.rushFee.toLocaleString()}</span></div>` : ""}
+        <div class="totals-row total"><span>Total</span><span>₱${order.total.toLocaleString()}</span></div>
+      </div>
+
+      ${paymentType === "full"
+        ? `<div class="paid-box"><div style="font-size:13px;font-weight:700;color:#15803d">✅ Fully Paid</div><div style="font-size:11px;color:#166534;margin-top:2px">No remaining balance due</div></div>`
+        : `<div class="balance-box">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div><div style="font-size:10px;color:#8b6f84;margin-bottom:2px">Downpayment Paid</div><div style="font-size:13px;font-weight:600;color:#4a2e42">₱${order.downpayment.toLocaleString()}</div></div>
+              <div style="text-align:right"><div style="font-size:10px;color:#8b6f84;margin-bottom:2px">${order.remainingBalanceVerified ? "Balance Paid ✅" : "Remaining Balance"}</div>
+              <div style="font-size:16px;font-weight:800;color:${order.remainingBalanceVerified ? "#15803d" : "#c77db3"}">${order.remainingBalanceVerified ? "Paid" : `₱${remaining.toLocaleString()}`}</div></div>
+            </div>
+            ${!order.remainingBalanceVerified ? `<div style="font-size:11px;color:#8b6f84;margin-top:6px">Remaining balance is due upon pickup.</div>` : ""}
+           </div>`
+      }
+
+      <div class="pickup-box">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><div class="label">Pickup Date</div><div class="val">📅 ${esc(order.pickupDate)}</div></div>
+          <div><div class="label">Pickup Time</div><div class="val">🕐 ${esc(order.pickupTime)}</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="footer">
+      <p><strong style="color:#4a2e42">Thank you for choosing Cake with Joy! 🎂</strong></p>
+      <p>Please bring this receipt when picking up your order.</p>
+      <p style="margin-top:6px;font-size:10px">This is your official order confirmation.</p>
+      <button class="print-btn" onclick="window.print()">🖨️ Print Receipt</button>
+    </div>
+  </div>
+  </body></html>`);
+  win.document.close();
+  setTimeout(() => win.print(), 500);
+}
+
 function OrderCard({ order, onClear }: { order: Order; onClear?: () => void }) {
   const [confirmClear, setConfirmClear] = useState(false);
   const [balanceProof, setBalanceProof] = useState("");
@@ -187,6 +307,27 @@ function OrderCard({ order, onClear }: { order: Order; onClear?: () => void }) {
           }}>
             {isDeclined ? "❌ Declined" : currentStep?.label}
           </span>
+          {!isDeclined && order.status !== "pending" && (
+            <button
+              onClick={() => printCustomerReceipt(order)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                background: "linear-gradient(135deg,#4a2e42,#7c3f6c)",
+                border: "none",
+                borderRadius: 100,
+                padding: "6px 14px",
+                fontSize: 12,
+                fontWeight: 700,
+                color: "#fff",
+                cursor: "pointer",
+                fontFamily: "system-ui, sans-serif",
+              }}
+            >
+              <Printer size={12} /> Receipt
+            </button>
+          )}
           {isClearable && !confirmClear && (
             <button
               onClick={() => setConfirmClear(true)}

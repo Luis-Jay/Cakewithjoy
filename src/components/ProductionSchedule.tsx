@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ref, onValue, update } from "firebase/database";
-import { db } from "../config/firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import { db, auth } from "../config/firebase";
 import { DndProvider, useDrag, useDrop } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -69,6 +70,7 @@ interface Order {
     image: string;
   };
   status: string;
+  clearedByAdmin: boolean;
   createdAt: string;
   pickupDate: string;
   pickupTime: string;
@@ -281,6 +283,7 @@ export function ProductionSchedule() {
 }
 
 function ProductionScheduleInner() {
+  const LOADING_TIMEOUT_MS = 15000;
   const [statusFilter, setStatusFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [staffFilter, setStaffFilter] = useState("all");
@@ -290,17 +293,45 @@ function ProductionScheduleInner() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [weekStartDate, setWeekStartDate] = useState(() => formatDateKey(new Date()));
   const [savingOrderId, setSavingOrderId] = useState<string | null>(null);
   const [queuePage, setQueuePage] = useState(0);
   const QUEUE_PAGE_SIZE = 8;
 
   useEffect(() => {
-    const unsub = onValue(ref(db, "allOrders"), (snap) => {
+    let unsubOrders: (() => void) | null = null;
+
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        setLoading(false);
+        setLoadError("You must be logged in to view the production schedule.");
+        return;
+      }
+
+      if (unsubOrders) return; // already subscribed
+
+      let settled = false;
+      const loadingTimeout = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        setLoading(false);
+        setLoadError("The production schedule took too long to load. Please refresh and try again.");
+      }, LOADING_TIMEOUT_MS);
+
+      const finishInitialLoad = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(loadingTimeout);
+        setLoading(false);
+      };
+
+      unsubOrders = onValue(ref(db, "allOrders"), (snap) => {
       const data = snap.val();
       if (!data) {
         setOrders([]);
-        setLoading(false);
+        setLoadError(null);
+        finishInitialLoad();
         return;
       }
 
@@ -330,6 +361,7 @@ function ProductionScheduleInner() {
             image: firstItem?.cakeImage ?? val.cakeImage ?? "",
           },
           status: val.status ?? "pending",
+          clearedByAdmin: !!val.clearedByAdmin,
           createdAt: val.createdAt ?? "",
           pickupDate: val.pickupDate ?? "",
           pickupTime: val.pickupTime ?? "",
@@ -343,13 +375,19 @@ function ProductionScheduleInner() {
       });
 
       setOrders(list);
-      setLoading(false);
-    }, () => {
-      setOrders([]);
-      setLoading(false);
+      setLoadError(null);
+      finishInitialLoad();
+      }, () => {
+        setOrders([]);
+        setLoadError("We couldn't load production orders from Firebase. Please check your access and try again.");
+        finishInitialLoad();
+      });
     });
 
-    return () => unsub();
+    return () => {
+      unsubAuth();
+      if (unsubOrders) unsubOrders();
+    };
   }, []);
 
   useEffect(() => {
@@ -370,6 +408,8 @@ function ProductionScheduleInner() {
         .filter((member) => member.isActive && ["production", "staff", "baker"].includes(member.role));
 
       setStaffMembers(staff);
+    }, () => {
+      setStaffMembers([]);
     });
 
     return () => unsub();
@@ -468,6 +508,7 @@ function ProductionScheduleInner() {
   };
 
   const filteredOrders = orders
+    .filter((order) => !order.clearedByAdmin && order.status !== "declined" && order.status !== "completed")
     .filter((order) => {
       const matchesStatus = statusFilter === "all" || order.status === statusFilter;
       const matchesPriority = priorityFilter === "all" || order.priority === priorityFilter;
@@ -509,7 +550,7 @@ function ProductionScheduleInner() {
 
   const totalOrders = filteredOrders.length;
   const pendingCount = filteredOrders.filter((order) => order.status === "pending" || order.status === "confirmed").length;
-  const bakingCount = filteredOrders.filter((order) => order.status === "baking").length;
+  const bakingCount = filteredOrders.filter((order) => order.status === "baking" || order.status === "quality_check").length;
   const readyCount = filteredOrders.filter((order) => order.status === "ready").length;
 
   const groupedTimelineOrders = displayedDates.map((date) => ({
@@ -542,6 +583,25 @@ function ProductionScheduleInner() {
           <div className="flex items-center justify-center min-h-[300px]">
             <p className="text-muted-foreground text-lg">Loading production schedule…</p>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-background pb-8">
+        <div className="container mx-auto px-4 py-8">
+          <Card className="border-rose-200 bg-rose-50/60">
+            <CardContent className="flex min-h-[220px] flex-col items-center justify-center gap-3 px-6 text-center">
+              <Package className="h-10 w-10 text-rose-500" />
+              <div className="space-y-1">
+                <h2 className="text-lg font-semibold text-foreground">Unable to load production schedule</h2>
+                <p className="text-sm text-muted-foreground">{loadError}</p>
+              </div>
+              <Button onClick={() => window.location.reload()}>Reload Page</Button>
+            </CardContent>
+          </Card>
         </div>
       </div>
     );
@@ -602,8 +662,8 @@ function ProductionScheduleInner() {
                       <SelectItem value="pending">Pending</SelectItem>
                       <SelectItem value="confirmed">Confirmed</SelectItem>
                       <SelectItem value="baking">In Production</SelectItem>
-                      <SelectItem value="ready">Ready</SelectItem>
-                      <SelectItem value="completed">Completed</SelectItem>
+                      <SelectItem value="quality_check">Quality Check</SelectItem>
+                      <SelectItem value="ready">Ready for Pickup</SelectItem>
                     </SelectContent>
                   </Select>
                   <Select value={priorityFilter} onValueChange={(v) => { setPriorityFilter(v); setQueuePage(0); }}>

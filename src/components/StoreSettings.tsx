@@ -76,6 +76,10 @@ export function StoreSettings() {
   const [bdoQR, setBdoQR] = useState<string>("");
   const [gcashNumber, setGcashNumber] = useState<string>("");
   const [bdoAccount, setBdoAccount] = useState<string>("");
+  const [gcashLabel, setGcashLabel] = useState<string>("GCash");
+  const [bdoLabel, setBdoLabel] = useState<string>("BDO Bank Transfer");
+  const [gcashColor, setGcashColor] = useState<string>("#1d4ed8");
+  const [bdoColor, setBdoColor] = useState<string>("#c2410c");
   const [qrSaving, setQrSaving] = useState(false);
   const [qrSaved, setQrSaved] = useState(false);
   const gcashInputRef = useRef<HTMLInputElement>(null);
@@ -113,6 +117,10 @@ export function StoreSettings() {
       setBdoQR(data.bdoQR ?? "");
       setGcashNumber(data.gcashNumber ?? "");
       setBdoAccount(data.bdoAccount ?? "");
+      setGcashLabel(data.gcashLabel ?? "GCash");
+      setBdoLabel(data.bdoLabel ?? "BDO Bank Transfer");
+      setGcashColor(data.gcashColor ?? "#1d4ed8");
+      setBdoColor(data.bdoColor ?? "#c2410c");
     });
 
     return () => { u1(); u2(); u3(); u4(); };
@@ -180,6 +188,10 @@ export function StoreSettings() {
         bdoQR: compressedBdo,
         gcashNumber,
         bdoAccount,
+        gcashLabel,
+        bdoLabel,
+        gcashColor,
+        bdoColor,
       });
       setGcashQR(compressedGcash);
       setBdoQR(compressedBdo);
@@ -360,51 +372,75 @@ export function StoreSettings() {
               <p style={{ margin: "0 0 24px", fontSize: 13, color: "#8b6f84" }}>Upload official GCash and BDO QR codes shown to customers at checkout.</p>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-                {/* GCash */}
                 {[
-                  { label: "GCash", color: "#1d4ed8", bg: "rgba(59,130,246,0.06)", border: "rgba(59,130,246,0.3)", qr: gcashQR, setQr: setGcashQR, inputRef: gcashInputRef, account: gcashNumber, setAccount: setGcashNumber, placeholder: "09XX XXX XXXX", accountLabel: "GCash Number" },
-                  { label: "BDO Bank Transfer", color: "#c2410c", bg: "rgba(234,88,12,0.06)", border: "rgba(234,88,12,0.3)", qr: bdoQR, setQr: setBdoQR, inputRef: bdoInputRef, account: bdoAccount, setAccount: setBdoAccount, placeholder: "0123 4567 8901", accountLabel: "Account Number" },
-                ].map(({ label, color, bg, border, qr, setQr, inputRef, account, setAccount, placeholder, accountLabel }) => (
-                  <div key={label} style={{ border: `1.5px solid ${border}`, borderRadius: 16, padding: "16px", background: bg }}>
-                    <p style={{ margin: "0 0 12px", fontWeight: 700, fontSize: 13, color }}>{label}</p>
+                  { colorVal: gcashColor, setColor: setGcashColor, qr: gcashQR, setQr: setGcashQR, inputRef: gcashInputRef, account: gcashNumber, setAccount: setGcashNumber, placeholder: "09XX XXX XXXX", accountLabel: "Account Number", nameVal: gcashLabel, setName: setGcashLabel, namePlaceholder: "e.g. GCash" },
+                  { colorVal: bdoColor,   setColor: setBdoColor,   qr: bdoQR,   setQr: setBdoQR,   inputRef: bdoInputRef,   account: bdoAccount,  setAccount: setBdoAccount,  placeholder: "0123 4567 8901", accountLabel: "Account Number", nameVal: bdoLabel,   setName: setBdoLabel,   namePlaceholder: "e.g. BDO Bank Transfer" },
+                ].map(({ colorVal, setColor, qr, setQr, inputRef, account, setAccount, placeholder, accountLabel, nameVal, setName, namePlaceholder }) => {
+                  const hex2rgba = (hex: string, a: number) => {
+                    const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+                    return `rgba(${r},${g},${b},${a})`;
+                  };
+                  const border = hex2rgba(colorVal, 0.35);
+                  const bg = hex2rgba(colorVal, 0.05);
+                  return (
+                    <div key={namePlaceholder} style={{ border: `1.5px solid ${border}`, borderRadius: 16, padding: "16px", background: bg }}>
 
-                    {/* QR upload area */}
-                    <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }}
-                      onChange={(e) => { const f = e.target.files?.[0]; if (f) readImageFile(f, setQr); e.target.value = ""; }}
-                    />
-                    <div
-                      onClick={() => inputRef.current?.click()}
-                      style={{ cursor: "pointer", borderRadius: 12, overflow: "hidden", border: `1.5px dashed ${border}`, background: "#fff", marginBottom: 12, minHeight: 140, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}
-                    >
-                      {qr ? (
-                        <>
-                          <img src={qr} alt={`${label} QR`} style={{ width: "100%", maxHeight: 200, objectFit: "contain", display: "block" }} />
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setQr(""); }}
-                            style={{ position: "absolute", top: 6, right: 6, width: 24, height: 24, borderRadius: "50%", background: "rgba(0,0,0,0.5)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
-                          >
-                            <X size={12} color="#fff" />
-                          </button>
-                        </>
-                      ) : (
-                        <div style={{ textAlign: "center", padding: "20px 12px" }}>
-                          <Upload size={22} color={color} style={{ marginBottom: 8 }} />
-                          <p style={{ margin: 0, fontSize: 12, color, fontWeight: 600 }}>Upload QR Image</p>
-                          <p style={{ margin: "4px 0 0", fontSize: 11, color: "#8b6f84" }}>PNG or JPG</p>
-                        </div>
-                      )}
+                      {/* Name field */}
+                      <label style={s.label}>Payment Method Name</label>
+                      <input
+                        style={{ ...s.input, borderColor: border, marginBottom: 12, fontWeight: 700, color: colorVal }}
+                        value={nameVal}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder={namePlaceholder}
+                      />
+
+                      {/* Color picker */}
+                      <label style={s.label}>Color</label>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                        <input
+                          type="color"
+                          value={colorVal}
+                          onChange={(e) => setColor(e.target.value)}
+                          style={{ width: 40, height: 36, padding: 2, border: `1.5px solid ${border}`, borderRadius: 8, cursor: "pointer", background: "#fff" }}
+                        />
+                        <span style={{ fontSize: 12, color: colorVal, fontWeight: 700, fontFamily: "monospace" }}>{colorVal}</span>
+                        {/* Quick presets */}
+                        {["#1d4ed8","#c2410c","#15803d","#7c3aed","#be185d","#0f766e"].map(c => (
+                          <div key={c} onClick={() => setColor(c)} style={{ width: 20, height: 20, borderRadius: "50%", background: c, cursor: "pointer", border: colorVal === c ? "2px solid #4a2e42" : "2px solid transparent", flexShrink: 0 }} />
+                        ))}
+                      </div>
+
+                      {/* QR upload area */}
+                      <label style={s.label}>QR Code Image</label>
+                      <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }}
+                        onChange={(e) => { const f = e.target.files?.[0]; if (f) readImageFile(f, setQr); e.target.value = ""; }}
+                      />
+                      <div
+                        onClick={() => inputRef.current?.click()}
+                        style={{ cursor: "pointer", borderRadius: 12, overflow: "hidden", border: `1.5px dashed ${border}`, background: "#fff", marginBottom: 12, minHeight: 130, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}
+                      >
+                        {qr ? (
+                          <>
+                            <img src={qr} alt="QR" style={{ width: "100%", maxHeight: 190, objectFit: "contain", display: "block" }} />
+                            <button onClick={(e) => { e.stopPropagation(); setQr(""); }} style={{ position: "absolute", top: 6, right: 6, width: 24, height: 24, borderRadius: "50%", background: "rgba(0,0,0,0.5)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                              <X size={12} color="#fff" />
+                            </button>
+                          </>
+                        ) : (
+                          <div style={{ textAlign: "center", padding: "20px 12px" }}>
+                            <Upload size={22} color={colorVal} style={{ marginBottom: 8 }} />
+                            <p style={{ margin: 0, fontSize: 12, color: colorVal, fontWeight: 600 }}>Upload QR Image</p>
+                            <p style={{ margin: "4px 0 0", fontSize: 11, color: "#8b6f84" }}>PNG or JPG</p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Account number */}
+                      <label style={s.label}>{accountLabel}</label>
+                      <input style={{ ...s.input, borderColor: border }} value={account} onChange={(e) => setAccount(e.target.value)} placeholder={placeholder} />
                     </div>
-
-                    {/* Account number */}
-                    <label style={s.label}>{accountLabel}</label>
-                    <input
-                      style={{ ...s.input, borderColor: border }}
-                      value={account}
-                      onChange={(e) => setAccount(e.target.value)}
-                      placeholder={placeholder}
-                    />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               <button style={{ ...s.primaryBtn, marginTop: 20, opacity: qrSaving ? 0.7 : 1 }} onClick={saveQR} disabled={qrSaving}>

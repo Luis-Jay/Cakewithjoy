@@ -367,7 +367,7 @@ export function InventoryManagement() {
 
                     <div className="space-y-2">
                       <Label>Low Stock Threshold</Label>
-                      <Input type="number" placeholder="e.g., 5" value={newItem.lowStockThreshold} onChange={(e) => setNewItem((p) => ({ ...p, lowStockThreshold: e.target.value }))} />
+                      <Input type="number" min="0" placeholder="e.g., 5" value={newItem.lowStockThreshold} onChange={(e) => setNewItem((p) => ({ ...p, lowStockThreshold: String(Math.max(0, Number(e.target.value))) }))} />
                     </div>
                     {addError && (
                       <p className="text-sm text-red-600">{addError}</p>
@@ -597,7 +597,7 @@ export function InventoryManagement() {
                                       value={editLowStockThreshold}
                                       onChange={(e) => {
                                         setEditError("");
-                                        setEditLowStockThreshold(e.target.value);
+                                        setEditLowStockThreshold(String(Math.max(0, Number(e.target.value))));
                                       }}
                                     />
                                   </div>

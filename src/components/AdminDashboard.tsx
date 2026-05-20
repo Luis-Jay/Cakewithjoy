@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { ref, onValue, push, update, remove } from "firebase/database";
 import { db } from "../config/firebase";
 import { useAuthStore } from "../store/authStore";
@@ -60,7 +60,6 @@ import {
   Plus,
   Edit,
   Trash2,
-  Bell,
   Printer,
 } from "lucide-react";
 import { ReportPreview } from "./ReportPreview";
@@ -111,6 +110,7 @@ export function AdminDashboard() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [isReportDialogOpen, setIsReportDialogOpen] = useState(false);
   const [isReportPreviewOpen, setIsReportPreviewOpen] = useState(false);
+  const reportScrollRef = useRef<HTMLDivElement>(null);
   const [reportType, setReportType] = useState("");
   const [reportFormat, setReportFormat] = useState("pdf");
   const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({});
@@ -292,6 +292,7 @@ export function AdminDashboard() {
     setIsReportPreviewOpen(true);
     setLastReportGeneratedAt(new Date());
     toast.success(`${reportType.charAt(0).toUpperCase() + reportType.slice(1)} report generated successfully!`);
+    setTimeout(() => reportScrollRef.current?.focus(), 100);
   };
 
   const handlePrintReport = () => {
@@ -1146,10 +1147,13 @@ export function AdminDashboard() {
       {/* Report Preview Dialog */}
       <Dialog
         open={isReportPreviewOpen}
-        onOpenChange={setIsReportPreviewOpen}
+        onOpenChange={(open) => {
+          setIsReportPreviewOpen(open);
+          if (open) setTimeout(() => reportScrollRef.current?.focus(), 120);
+        }}
       >
-        <DialogContent className="max-w-[96vw] w-full h-[92dvh] max-h-[92dvh] flex flex-col overflow-hidden p-0">
-          <div className="flex-shrink-0 bg-background/95 backdrop-blur border-b px-5 py-4">
+        <DialogContent className="flex h-[min(92dvh,900px)] max-h-[calc(100dvh-2rem)] w-[min(1120px,calc(100vw-2rem))] max-w-none flex-col gap-0 overflow-hidden p-0">
+          <div className="flex-shrink-0 border-b bg-background/95 px-5 py-4 pr-12 backdrop-blur">
             <DialogHeader>
               <DialogTitle className="text-xl">Report Preview</DialogTitle>
               <DialogDescription className="text-sm">
@@ -1159,8 +1163,9 @@ export function AdminDashboard() {
           </div>
 
           <div
-            className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-muted/20 p-5 touch-pan-y [scrollbar-gutter:stable] [scroll-behavior:smooth]"
-            style={{ WebkitOverflowScrolling: "touch" }}
+            ref={reportScrollRef}
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-muted/40 px-3 py-4 [scrollbar-gutter:stable] sm:px-6 sm:py-6 outline-none"
+            style={{ WebkitOverflowScrolling: "touch", scrollBehavior: "auto" }}
             tabIndex={0}
           >
             <div id="report-preview-root">
@@ -1175,12 +1180,12 @@ export function AdminDashboard() {
             </div>
           </div>
 
-          <div className="flex-shrink-0 bg-background/95 backdrop-blur border-t px-5 py-4">
-            <DialogFooter className="flex gap-2">
+          <div className="flex-shrink-0 border-t bg-background/95 px-5 py-4 backdrop-blur">
+            <DialogFooter className="gap-2 sm:items-center">
               <Button
                 variant="outline"
                 onClick={handlePrintReport}
-                className="gap-2"
+                className="gap-2 sm:min-w-36"
               >
                 <Printer className="w-4 h-4" />
                 Print Report
@@ -1188,13 +1193,14 @@ export function AdminDashboard() {
               <Button
                 variant="outline"
                 onClick={handleDownloadReport}
-                className="gap-2"
+                className="gap-2 sm:min-w-44"
               >
                 <Download className="w-4 h-4" />
                 Download {reportFormat.toUpperCase()}
               </Button>
               <Button
                 onClick={() => setIsReportPreviewOpen(false)}
+                className="sm:min-w-24"
               >
                 Close
               </Button>

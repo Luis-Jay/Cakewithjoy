@@ -193,7 +193,7 @@ export default function App() {
   };
 
   const tabTriggerClass =
-    "gap-2 data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none";
+    "gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 whitespace-nowrap data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none";
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -209,10 +209,11 @@ export default function App() {
 
       {/* Navigation Tabs */}
       <div className="bg-white border-b border-border">
-        <div className="container mx-auto px-4">
+        <div className="overflow-x-auto scrollbar-hide">
+          <div className="container mx-auto px-2 sm:px-4 min-w-max sm:min-w-0">
           {role === "admin" ? (
             <Tabs value={currentView} onValueChange={(v: string) => setCurrentView(v as View)}>
-              <TabsList className="bg-transparent border-b-0 h-12">
+              <TabsList className="bg-transparent border-b-0 h-12 w-max sm:w-auto">
                 <TabsTrigger value="admin" className={tabTriggerClass}>
                   <LayoutDashboard className="w-4 h-4" /> Dashboard
                 </TabsTrigger>
@@ -250,7 +251,7 @@ export default function App() {
             </Tabs>
           ) : role === "staff" ? (
             <Tabs value={currentView} onValueChange={(v: string) => setCurrentView(v as View)}>
-              <TabsList className="bg-transparent border-b-0 h-12">
+              <TabsList className="bg-transparent border-b-0 h-12 w-max sm:w-auto">
                 <TabsTrigger value="staff-dashboard" className={tabTriggerClass}>
                   <UserCog className="w-4 h-4" /> Dashboard
                 </TabsTrigger>
@@ -270,7 +271,7 @@ export default function App() {
             </Tabs>
           ) : role === "production" ? (
             <Tabs value={currentView} onValueChange={(v: string) => setCurrentView(v as View)}>
-              <TabsList className="bg-transparent border-b-0 h-12">
+              <TabsList className="bg-transparent border-b-0 h-12 w-max sm:w-auto">
                 <TabsTrigger value="production-dashboard" className={tabTriggerClass}>
                   <LayoutDashboard className="w-4 h-4" /> Kitchen Dashboard
                 </TabsTrigger>
@@ -290,7 +291,7 @@ export default function App() {
             </Tabs>
           ) : role === "baker" ? (
             <Tabs value={currentView} onValueChange={(v: string) => setCurrentView(v as View)}>
-              <TabsList className="bg-transparent border-b-0 h-12">
+              <TabsList className="bg-transparent border-b-0 h-12 w-max sm:w-auto">
                 <TabsTrigger value="production-dashboard" className={tabTriggerClass}>
                   <LayoutDashboard className="w-4 h-4" /> Dashboard
                 </TabsTrigger>
@@ -307,7 +308,7 @@ export default function App() {
             </Tabs>
           ) : role === "sales" ? (
             <Tabs value={currentView} onValueChange={(v: string) => setCurrentView(v as View)}>
-              <TabsList className="bg-transparent border-b-0 h-12">
+              <TabsList className="bg-transparent border-b-0 h-12 w-max sm:w-auto">
                 <TabsTrigger value="sales-orders" className={tabTriggerClass}>
                   <FileText className="w-4 h-4" /> Orders
                 </TabsTrigger>
@@ -319,7 +320,7 @@ export default function App() {
           ) : (
             // customer or guest — guests don't see Cart / Track Order tabs
             <Tabs value={currentView} onValueChange={(v: string) => setCurrentView(v as View)}>
-              <TabsList className="bg-transparent border-b-0 h-12">
+              <TabsList className="bg-transparent border-b-0 h-12 w-max sm:w-auto">
                 <TabsTrigger value="home" className={tabTriggerClass}>
                   <Home className="w-4 h-4" /> Home
                 </TabsTrigger>
@@ -342,6 +343,7 @@ export default function App() {
               </TabsList>
             </Tabs>
           )}
+          </div>
         </div>
       </div>
 

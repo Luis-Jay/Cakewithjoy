@@ -103,6 +103,10 @@ export function ReadyMadeCakes({ initialCategory, isGuest = false, onSignIn }: {
   const [bdoQR, setBdoQR] = useState("");
   const [gcashNumber, setGcashNumber] = useState("");
   const [bdoAccount, setBdoAccount] = useState("");
+  const [gcashLabel, setGcashLabel] = useState("GCash");
+  const [bdoLabel, setBdoLabel] = useState("BDO Bank Transfer");
+  const [gcashColor, setGcashColor] = useState("#1d4ed8");
+  const [bdoColor, setBdoColor] = useState("#c2410c");
 
   useEffect(() => {
     const unsub = onValue(ref(db, "paymentQR"), (snap) => {
@@ -111,6 +115,10 @@ export function ReadyMadeCakes({ initialCategory, isGuest = false, onSignIn }: {
       setBdoQR(data.bdoQR ?? "");
       setGcashNumber(data.gcashNumber ?? "");
       setBdoAccount(data.bdoAccount ?? "");
+      setGcashLabel(data.gcashLabel ?? "GCash");
+      setBdoLabel(data.bdoLabel ?? "BDO Bank Transfer");
+      setGcashColor(data.gcashColor ?? "#1d4ed8");
+      setBdoColor(data.bdoColor ?? "#c2410c");
     });
     return () => unsub();
   }, []);
@@ -556,45 +564,36 @@ export function ReadyMadeCakes({ initialCategory, isGuest = false, onSignIn }: {
               </RadioGroup>
             </div>
 
-            {/* GCash Payment */}
-            <div className="border-2 border-blue-200 rounded-lg p-4 bg-blue-50">
-              <p className="font-semibold text-blue-900 mb-1">GCash Payment</p>
-              <p className="text-xs text-blue-700 mb-3">Scan with GCash App</p>
-              {gcashQR ? (
-                <div className="bg-white p-3 rounded-lg flex items-center justify-center mb-3">
-                  <img src={gcashQR} alt="GCash QR" style={{ width: 180, height: 180, objectFit: "contain", borderRadius: 8 }} />
+            {[
+              { label: gcashLabel, color: gcashColor, qr: gcashQR, account: gcashNumber },
+              { label: bdoLabel,   color: bdoColor,   qr: bdoQR,   account: bdoAccount  },
+            ].map(({ label, color, qr, account }, i) => {
+              const r = parseInt(color.slice(1,3),16), g = parseInt(color.slice(3,5),16), b = parseInt(color.slice(5,7),16);
+              const border = `rgba(${r},${g},${b},0.35)`;
+              const bg = `rgba(${r},${g},${b},0.05)`;
+              const bgLight = `rgba(${r},${g},${b},0.08)`;
+              const amount = paymentType === "deposit" ? (finalPrice * 0.5).toLocaleString() : finalPrice.toLocaleString();
+              return (
+                <div key={i} style={{ border: `2px solid ${border}`, borderRadius: 10, padding: 16, background: bg }}>
+                  <p style={{ margin: "0 0 4px", fontWeight: 700, fontSize: 14, color }}>{label}</p>
+                  <p style={{ margin: "0 0 12px", fontSize: 11, color }}>Scan with payment app</p>
+                  {qr ? (
+                    <div style={{ background: "#fff", borderRadius: 10, padding: 12, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12 }}>
+                      <img src={qr} alt={`${label} QR`} style={{ width: 180, height: 180, objectFit: "contain", borderRadius: 8 }} />
+                    </div>
+                  ) : (
+                    <div style={{ background: bgLight, borderRadius: 10, padding: 16, textAlign: "center", marginBottom: 12 }}>
+                      <p style={{ margin: 0, fontSize: 12, color }}>QR code not yet configured.</p>
+                    </div>
+                  )}
+                  <div style={{ fontSize: 12, color, lineHeight: 1.8 }}>
+                    <p style={{ margin: 0 }}><strong>Account Name:</strong> Cake with Joy</p>
+                    {account && <p style={{ margin: 0 }}><strong>Account:</strong> {account}</p>}
+                    <p style={{ margin: 0 }}><strong>Amount:</strong> ₱{amount}</p>
+                  </div>
                 </div>
-              ) : (
-                <div className="bg-blue-100 rounded-lg p-4 text-center mb-3">
-                  <p className="text-xs text-blue-700">QR code not yet configured.</p>
-                </div>
-              )}
-              <div className="space-y-1 text-xs text-blue-900">
-                <p><span className="font-semibold">Account Name:</span> Cake with Joy</p>
-                {gcashNumber && <p><span className="font-semibold">Number:</span> {gcashNumber}</p>}
-                <p><span className="font-semibold">Amount:</span> ₱{(paymentType === "deposit" ? (finalPrice * 0.5).toLocaleString() : finalPrice.toLocaleString())}</p>
-              </div>
-            </div>
-
-            {/* BDO Payment */}
-            <div className="border-2 border-orange-200 rounded-lg p-4 bg-orange-50">
-              <p className="font-semibold text-orange-900 mb-1">BDO Bank Transfer</p>
-              <p className="text-xs text-orange-700 mb-3">Scan with BDO App or use account details</p>
-              {bdoQR ? (
-                <div className="bg-white p-3 rounded-lg flex items-center justify-center mb-3">
-                  <img src={bdoQR} alt="BDO QR" style={{ width: 180, height: 180, objectFit: "contain", borderRadius: 8 }} />
-                </div>
-              ) : (
-                <div className="bg-orange-100 rounded-lg p-4 text-center mb-3">
-                  <p className="text-xs text-orange-700">QR code not yet configured.</p>
-                </div>
-              )}
-              <div className="space-y-1 text-xs text-orange-900">
-                <p><span className="font-semibold">Account Name:</span> Cake with Joy</p>
-                {bdoAccount && <p><span className="font-semibold">Account Number:</span> {bdoAccount}</p>}
-                <p><span className="font-semibold">Amount:</span> ₱{(paymentType === "deposit" ? (finalPrice * 0.5).toLocaleString() : finalPrice.toLocaleString())}</p>
-              </div>
-            </div>
+              );
+            })}
 
             {/* Payment Instructions */}
             <div className="bg-muted/50 p-3 rounded-lg text-xs space-y-2">

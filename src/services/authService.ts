@@ -7,7 +7,7 @@ import {
   updateProfile,
 } from "firebase/auth";
 import { auth } from "../config/firebase";
-import api from "../config/api";
+import api, { isApiConfigured } from "../config/api";
 
 const PRIVILEGED_PREFIXES = ["admin", "production", "sales", "staff", "baker"];
 const PRIVILEGED_EMAIL_DOMAINS = ["cakewjoy.com", "cakewithjoy.com"];
@@ -39,10 +39,12 @@ export const authService = {
     await updateProfile(credential.user, { displayName: fullName });
     await sendEmailVerification(credential.user);
     // Sync new user to MySQL backend (non-blocking – backend may not be up yet)
-    try {
-      await api.post("/auth/sync", { full_name: fullName });
-    } catch {
-      // Backend not running yet – silently continue
+    if (isApiConfigured) {
+      try {
+        await api.post("/auth/sync", { full_name: fullName });
+      } catch {
+        // Backend not running yet – silently continue
+      }
     }
     await signOut(auth);
     return credential;
@@ -63,6 +65,8 @@ export const authService = {
 
   // Called after login to sync profile + get role from MySQL
   syncSession: async () => {
+    if (!isApiConfigured) return null;
+
     try {
       const { data } = await api.get("/auth/me");
       return data;

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { ref, onValue, update } from "firebase/database";
 import { db } from "../config/firebase";
-import { X, Check, XCircle, Trash2, StickyNote } from "lucide-react";
+import { X, Check, XCircle, Archive, RotateCcw, StickyNote, Printer } from "lucide-react";
 
 type OrderStatus = "pending" | "confirmed" | "baking" | "quality_check" | "ready" | "completed" | "declined";
 type PaymentType = "downpayment" | "deposit" | "full";
@@ -94,9 +94,13 @@ export function OrderManagement() {
   const [declineCustom, setDeclineCustom] = useState("");
   const [declining, setDeclining] = useState(false);
 
-  // Clear modal state
-  const [clearTarget, setClearTarget] = useState<LiveOrder | "all-completed" | "all-declined" | null>(null);
-  const [clearing, setClearing] = useState(false);
+  // Archive modal state
+  const [archiveTarget, setArchiveTarget] = useState<LiveOrder | "all-completed" | "all-declined" | null>(null);
+  const [archiving, setArchiving] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+
+  // Receipt modal state
+  const [receiptOrder, setReceiptOrder] = useState<LiveOrder | null>(null);
 
   useEffect(() => {
     const ordersRef = ref(db, "allOrders");
@@ -118,7 +122,6 @@ export function OrderManagement() {
             : null;
           return { orderId: key, ...(v as Omit<LiveOrder, "orderId">), idDocs };
         })
-        .filter((o) => !o.clearedByAdmin);
       list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setOrders(list);
       setLoading(false);
@@ -165,26 +168,34 @@ export function OrderManagement() {
     }
   };
 
-  const confirmClear = async () => {
-    if (!clearTarget) return;
-    setClearing(true);
+  const confirmArchive = async () => {
+    if (!archiveTarget) return;
+    setArchiving(true);
     try {
-      if (clearTarget === "all-completed") {
+      if (archiveTarget === "all-completed") {
         await Promise.all(
-          orders.filter((o) => o.status === "completed").map((o) => update(ref(db, `allOrders/${o.orderId}`), { clearedByAdmin: true }))
+          activeOrders.filter((o) => o.status === "completed").map((o) => update(ref(db, `allOrders/${o.orderId}`), { clearedByAdmin: true }))
         );
-      } else if (clearTarget === "all-declined") {
+      } else if (archiveTarget === "all-declined") {
         await Promise.all(
-          orders.filter((o) => o.status === "declined").map((o) => update(ref(db, `allOrders/${o.orderId}`), { clearedByAdmin: true }))
+          activeOrders.filter((o) => o.status === "declined").map((o) => update(ref(db, `allOrders/${o.orderId}`), { clearedByAdmin: true }))
         );
       } else {
-        await update(ref(db, `allOrders/${clearTarget.orderId}`), { clearedByAdmin: true });
+        await update(ref(db, `allOrders/${archiveTarget.orderId}`), { clearedByAdmin: true });
       }
-      setClearTarget(null);
+      setArchiveTarget(null);
     } catch (e) {
-      console.error("Failed to clear order(s)", e);
+      console.error("Failed to archive order(s)", e);
     } finally {
-      setClearing(false);
+      setArchiving(false);
+    }
+  };
+
+  const unarchiveOrder = async (order: LiveOrder) => {
+    try {
+      await update(ref(db, `allOrders/${order.orderId}`), { clearedByAdmin: false });
+    } catch (e) {
+      console.error("Failed to unarchive order", e);
     }
   };
 
@@ -201,14 +212,119 @@ export function OrderManagement() {
     }
   };
 
+  const confirmPaymentAndShowReceipt = async (order: LiveOrder) => {
+    setUpdating(order.orderId);
+    try {
+      await update(ref(db, `allOrders/${order.orderId}`), { status: "confirmed" });
+      update(ref(db, `orders/${order.customerId}/${order.orderId}`), { status: "confirmed" }).catch(() => {});
+      setReceiptOrder({ ...order, status: "confirmed" });
+    } catch (e) {
+      console.error("Failed to confirm order", e);
+    } finally {
+      setUpdating(null);
+    }
+  };
+
+  const esc = (v: unknown) =>
+    String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+  const printConfirmationReceipt = (order: LiveOrder) => {
+    const win = window.open("", "_blank", "width=720,height=960");
+    if (!win) return;
+    const confirmedAt = new Date().toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    const payType = normalizePaymentType(order);
+    const remaining = getRemainingBalance(order);
+    const amountPaid = payType === "full" ? order.total : (order.downpayment || order.amountDue || 0);
+    const fmt = (n: number) => `₱${n.toLocaleString("en-US", { minimumFractionDigits: 2 })}`;
+    const itemsHtml = (order.items ?? []).map((item) =>
+      `<tr><td>${esc(item.name)}</td><td>×${item.quantity}</td><td>${fmt(item.price * item.quantity)}</td></tr>`
+    ).join("");
+    win.document.write(`<!DOCTYPE html><html><head><title>Order Confirmation – ${order.orderId.slice(0, 8).toUpperCase()}</title><style>
+      @page{size:A5 portrait;margin:15mm 18mm}
+      *{box-sizing:border-box;margin:0;padding:0}
+      body{font-family:'Helvetica Neue',Arial,sans-serif;background:#fff;color:#1a1a2e;font-size:12px}
+      .r{width:100%}
+      .hdr{text-align:center;padding-bottom:16px;margin-bottom:14px;border-bottom:2px solid #c77db3}
+      .brand{font-size:22px;font-weight:900;color:#4a2e42}
+      .brand-sub{font-size:9px;color:#8b6f84;letter-spacing:.2em;text-transform:uppercase;margin-top:3px}
+      .badge{display:inline-block;margin-top:10px;background:#d1fae5;border:1px solid #6ee7b7;border-radius:100px;padding:4px 16px;font-size:10px;font-weight:800;color:#065f46;letter-spacing:.08em}
+      .meta{display:flex;justify-content:space-between;font-size:10px;color:#6b5263;padding:8px 0;border-bottom:1px solid #f0dcea;margin-bottom:14px}
+      .sec{margin-bottom:14px}
+      .sec-t{font-size:8px;font-weight:800;letter-spacing:.15em;text-transform:uppercase;color:#c77db3;margin-bottom:6px;padding-bottom:4px;border-bottom:.5px solid #f0dcea}
+      .row{display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px}
+      .lbl{color:#6b5263}.val{font-weight:600;color:#1a1a2e}
+      table{width:100%;border-collapse:collapse}
+      th{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#8b6f84;padding:0 0 5px;text-align:left;border-bottom:.5px solid #f0dcea}
+      th:nth-child(2){text-align:center}th:last-child{text-align:right}
+      td{padding:5px 0;border-bottom:.5px solid #f9eef7;vertical-align:top}
+      td:nth-child(2){text-align:center;color:#c77db3;font-weight:700}
+      td:last-child{text-align:right;font-weight:600}
+      .tot-line{display:flex;justify-content:space-between;font-size:12px;padding:3px 0}
+      .tot-total{display:flex;justify-content:space-between;font-size:15px;font-weight:900;color:#4a2e42;border-top:1.5px solid #c77db3;padding-top:7px;margin-top:5px}
+      .bal-box{background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:8px 12px;margin-top:10px}
+      .bal-box .row{color:#92400e;font-weight:700;margin-bottom:2px}
+      .bal-note{font-size:9px;color:#b45309;margin-top:3px}
+      .pickup-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+      .p-box{background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px 12px}
+      .p-lbl{font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;color:#1d4ed8;margin-bottom:4px}
+      .p-val{font-size:14px;font-weight:800;color:#1e3a8a}
+      .ftr{text-align:center;margin-top:22px;padding-top:14px;border-top:1px dashed #d89fc8;font-size:10px;color:#8b6f84;line-height:1.9}
+      .ftr strong{color:#4a2e42}
+      .print-btn{display:block;width:100%;margin-top:20px;padding:12px;background:#c77db3;color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer}
+      @media print{.print-btn{display:none}}
+    </style></head><body><div class="r">
+      <div class="hdr">
+        <div class="brand">🎂 Cake with Joy</div>
+        <div class="brand-sub">Order Confirmation Receipt</div>
+        <div class="badge">✓ Payment Confirmed</div>
+      </div>
+      <div class="meta">
+        <span>Receipt No: <strong>${esc(order.orderId.slice(0, 8).toUpperCase())}</strong></span>
+        <span>Confirmed: <strong>${esc(confirmedAt)}</strong></span>
+      </div>
+      <div class="sec">
+        <div class="sec-t">Customer Information</div>
+        <div class="row"><span class="lbl">Name</span><span class="val">${esc(order.customerName)}</span></div>
+        <div class="row"><span class="lbl">Phone</span><span class="val">${esc(order.customerPhone)}</span></div>
+      </div>
+      <div class="sec">
+        <div class="sec-t">Order Items</div>
+        <table><thead><tr><th>Item</th><th>Qty</th><th>Amount</th></tr></thead><tbody>${itemsHtml}</tbody></table>
+      </div>
+      <div class="sec">
+        <div class="sec-t">Payment Summary</div>
+        <div class="tot-line"><span class="lbl">Subtotal</span><span>${fmt(order.subtotal)}</span></div>
+        ${order.rushFee > 0 ? `<div class="tot-line"><span class="lbl">⚡ Rush Fee</span><span>${fmt(order.rushFee)}</span></div>` : ""}
+        <div class="tot-line"><span class="lbl">Amount Paid</span><span style="color:#15803d;font-weight:700">${fmt(amountPaid)}</span></div>
+        <div class="tot-total"><span>Order Total</span><span>${fmt(order.total)}</span></div>
+        ${remaining > 0 ? `<div class="bal-box"><div class="row"><span>⚠️ Remaining Balance</span><span>${fmt(remaining)}</span></div><div class="bal-note">Balance is due on or before pickup date.</div></div>` : `<div class="tot-line" style="margin-top:8px"><span class="lbl">Balance</span><span style="color:#065f46;font-weight:700">Fully Paid ✓</span></div>`}
+      </div>
+      <div class="sec">
+        <div class="sec-t">Pickup Schedule</div>
+        <div class="pickup-grid">
+          <div class="p-box"><div class="p-lbl">Pickup Date</div><div class="p-val">${esc(order.pickupDate)}</div></div>
+          <div class="p-box"><div class="p-lbl">Pickup Time</div><div class="p-val">${esc(order.pickupTime)}</div></div>
+        </div>
+      </div>
+      <div class="ftr"><strong>Thank you for choosing Cake with Joy! 🎂</strong><br>Please present this receipt upon pickup.<br>Motorcycles are not recommended for cake pickup.</div>
+      <button class="print-btn" onclick="window.print()">🖨️ Print This Receipt</button>
+    </div></body></html>`);
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 500);
+  };
+
+  const activeOrders = orders.filter((o) => !o.clearedByAdmin);
+  const archivedOrders = orders.filter((o) => o.clearedByAdmin);
+
   const allStatuses: (OrderStatus | "all")[] = ["all", ...STATUS_FLOW, "declined"];
 
   const stats = [...STATUS_FLOW, "declined" as OrderStatus].reduce((acc, s) => {
-    acc[s] = orders.filter((o) => o.status === s).length;
+    acc[s] = activeOrders.filter((o) => o.status === s).length;
     return acc;
   }, {} as Record<OrderStatus, number>);
 
-  const filtered = orders
+  const filtered = activeOrders
     .filter((o) => filter === "all" || o.status === filter)
     .filter((o) =>
       search === "" ||
@@ -221,10 +337,18 @@ export function OrderManagement() {
       return a.customerName.localeCompare(b.customerName);
     });
 
+  const filteredArchived = archivedOrders
+    .filter((o) =>
+      search === "" ||
+      o.customerName.toLowerCase().includes(search.toLowerCase()) ||
+      o.orderId.toLowerCase().includes(search.toLowerCase())
+    )
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
   const canDecline = (status: OrderStatus) => status === "pending" || status === "confirmed";
 
   return (
-    <div style={{ minHeight: "100vh", background: "#F4E9F2", fontFamily: "system-ui, sans-serif", padding: "32px 24px" }}>
+    <div style={{ minHeight: "100vh", background: "#F4E9F2", fontFamily: "system-ui, sans-serif" }} className="px-3 py-6 sm:px-6 sm:py-8">
       <div style={{ maxWidth: 1120, margin: "0 auto" }}>
 
         {/* Header */}
@@ -241,7 +365,7 @@ export function OrderManagement() {
         </div>
 
         {/* Stats row */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, marginBottom: 28 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 28 }} className="sm:!grid-cols-6">
           {([...STATUS_FLOW, "declined"] as OrderStatus[]).map((s) => {
             const cfg = STATUS_CONFIG[s];
             const isActive = filter === s;
@@ -272,7 +396,7 @@ export function OrderManagement() {
           })}
         </div>
 
-        {/* Search + bulk clear */}
+        {/* Search + bulk archive + archive toggle */}
         <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <input
             value={search}
@@ -292,9 +416,9 @@ export function OrderManagement() {
               boxSizing: "border-box",
             }}
           />
-          {orders.filter((o) => o.status === "completed").length > 0 && (
+          {!showArchived && activeOrders.filter((o) => o.status === "completed").length > 0 && (
             <button
-              onClick={() => setClearTarget("all-completed")}
+              onClick={() => setArchiveTarget("all-completed")}
               style={{
                 display: "flex", alignItems: "center", gap: 6,
                 padding: "9px 16px", borderRadius: 12,
@@ -305,12 +429,12 @@ export function OrderManagement() {
                 whiteSpace: "nowrap",
               }}
             >
-              <Trash2 size={13} /> Clear all completed
+              <Archive size={13} /> Archive all completed
             </button>
           )}
-          {orders.filter((o) => o.status === "declined").length > 0 && (
+          {!showArchived && activeOrders.filter((o) => o.status === "declined").length > 0 && (
             <button
-              onClick={() => setClearTarget("all-declined")}
+              onClick={() => setArchiveTarget("all-declined")}
               style={{
                 display: "flex", alignItems: "center", gap: 6,
                 padding: "9px 16px", borderRadius: 12,
@@ -321,9 +445,23 @@ export function OrderManagement() {
                 whiteSpace: "nowrap",
               }}
             >
-              <Trash2 size={13} /> Clear all declined
+              <Archive size={13} /> Archive all declined
             </button>
           )}
+          <button
+            onClick={() => setShowArchived((v) => !v)}
+            style={{
+              display: "flex", alignItems: "center", gap: 6,
+              padding: "9px 16px", borderRadius: 12,
+              border: `1.5px solid ${showArchived ? "rgba(199,125,179,0.6)" : "rgba(216,159,200,0.4)"}`,
+              background: showArchived ? "rgba(199,125,179,0.12)" : "#fff",
+              color: showArchived ? "#c77db3" : "#8b6f84", fontSize: 12, fontWeight: 700,
+              cursor: "pointer", fontFamily: "system-ui, sans-serif",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <Archive size={13} /> {showArchived ? `Active Orders` : `View Archive (${archivedOrders.length})`}
+          </button>
         </div>
 
         {/* Table */}
@@ -332,21 +470,89 @@ export function OrderManagement() {
           borderRadius: 24,
           border: "1px solid rgba(216,159,200,0.3)",
           boxShadow: "0 4px 32px rgba(216,159,200,0.1)",
-          overflow: "hidden",
+          overflowX: "auto",
         }}>
           {loading ? (
             <div style={{ textAlign: "center", padding: "64px 0", color: "#8b6f84", fontSize: 14 }}>
               Loading orders…
             </div>
+          ) : showArchived ? (
+            /* ── ARCHIVED VIEW ── */
+            filteredArchived.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "64px 0" }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>📦</div>
+                <p style={{ color: "#8b6f84", fontSize: 14, margin: 0 }}>No archived orders yet</p>
+              </div>
+            ) : (
+              <div style={{ minWidth: 680 }}>
+                <div style={{ padding: "14px 24px", background: "rgba(199,125,179,0.06)", borderBottom: "1px solid rgba(216,159,200,0.2)", display: "flex", alignItems: "center", gap: 8 }}>
+                  <Archive size={14} color="#c77db3" />
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#c77db3", letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                    Archived Orders — {filteredArchived.length} record{filteredArchived.length !== 1 ? "s" : ""}
+                  </span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.6fr 100px 120px 160px 120px", padding: "12px 24px", background: "rgba(216,159,200,0.06)", borderBottom: "1px solid rgba(216,159,200,0.15)" }}>
+                  {["Customer", "Items", "Total", "Pickup", "Status", "Action"].map((h) => (
+                    <span key={h} style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8b6f84" }}>{h}</span>
+                  ))}
+                </div>
+                {filteredArchived.map((order, idx) => {
+                  const cfg = STATUS_CONFIG[order.status];
+                  return (
+                    <div key={order.orderId} style={{
+                      display: "grid", gridTemplateColumns: "1.4fr 1.6fr 100px 120px 160px 120px",
+                      padding: "14px 24px", borderBottom: idx < filteredArchived.length - 1 ? "1px solid rgba(216,159,200,0.1)" : "none",
+                      alignItems: "center", background: "rgba(216,159,200,0.02)",
+                    }}>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: "#6b5263" }}>{order.customerName}</div>
+                        <div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}>{order.customerPhone}</div>
+                        <div style={{ fontSize: 9, color: "#aaa", fontFamily: "monospace", marginTop: 3 }}>{order.orderId.slice(0, 8)}</div>
+                      </div>
+                      <div style={{ fontSize: 12, color: "#6b5263", lineHeight: 1.6 }}>
+                        {(order.items ?? []).slice(0, 2).map((item, i) => (
+                          <div key={i}>{item.name} <span style={{ color: "#c77db3", fontWeight: 700 }}>×{item.quantity}</span></div>
+                        ))}
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: "#6b5263" }}>₱{order.total.toLocaleString()}</div>
+                      <div style={{ fontSize: 12, color: "#6b5263" }}>
+                        <div>{order.pickupDate}</div>
+                        <div style={{ color: "#aaa", marginTop: 2 }}>{order.pickupTime}</div>
+                      </div>
+                      <div>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 100, fontSize: 10, fontWeight: 700, color: cfg.color, background: cfg.bg, border: `1px solid ${cfg.border}`, opacity: 0.7 }}>
+                          {cfg.emoji} {cfg.label}
+                        </span>
+                      </div>
+                      <div>
+                        <button
+                          onClick={() => unarchiveOrder(order)}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 5,
+                            padding: "6px 12px", borderRadius: 10,
+                            border: "1.5px solid rgba(199,125,179,0.4)",
+                            background: "rgba(199,125,179,0.07)",
+                            color: "#c77db3", fontSize: 11, fontWeight: 700,
+                            cursor: "pointer", fontFamily: "system-ui, sans-serif",
+                          }}
+                        >
+                          <RotateCcw size={11} /> Unarchive
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )
           ) : filtered.length === 0 ? (
             <div style={{ textAlign: "center", padding: "64px 0" }}>
               <div style={{ fontSize: 40, marginBottom: 12 }}>📭</div>
               <p style={{ color: "#8b6f84", fontSize: 14, margin: 0 }}>
-                {orders.length === 0 ? "No orders placed yet" : "No orders match this filter"}
+                {activeOrders.length === 0 ? "No orders placed yet" : "No orders match this filter"}
               </p>
             </div>
           ) : (
-            <div>
+            <div style={{ minWidth: 680 }}>
               {/* Column headers */}
               <div style={{
                 display: "grid",
@@ -493,7 +699,7 @@ export function OrderManagement() {
                         <>
                           <span style={{ fontSize: 12, color: "#b91c1c", fontWeight: 700 }}>❌ Declined</span>
                           <button
-                            onClick={() => setClearTarget(order)}
+                            onClick={() => setArchiveTarget(order)}
                             style={{
                               display: "flex", alignItems: "center", gap: 5,
                               padding: "6px 12px", borderRadius: 10,
@@ -503,14 +709,14 @@ export function OrderManagement() {
                               cursor: "pointer", fontFamily: "system-ui, sans-serif",
                             }}
                           >
-                            <Trash2 size={11} /> Clear
+                            <Archive size={11} /> Archive
                           </button>
                         </>
                       ) : order.status === "completed" ? (
                         <>
                           <span style={{ fontSize: 12, color: "#15803d", fontWeight: 700 }}>✓ Completed</span>
                           <button
-                            onClick={() => setClearTarget(order)}
+                            onClick={() => setArchiveTarget(order)}
                             style={{
                               display: "flex", alignItems: "center", gap: 5,
                               padding: "6px 12px", borderRadius: 10,
@@ -520,7 +726,7 @@ export function OrderManagement() {
                               cursor: "pointer", fontFamily: "system-ui, sans-serif",
                             }}
                           >
-                            <Trash2 size={11} /> Clear
+                            <Archive size={11} /> Archive
                           </button>
                         </>
                       ) : (
@@ -528,7 +734,7 @@ export function OrderManagement() {
                           {/* Advance status button */}
                           {order.status === "pending" && order.paymentProof ? (
                             <button
-                              onClick={() => updateStatus(order, "confirmed")}
+                              onClick={() => confirmPaymentAndShowReceipt(order)}
                               style={{
                                 padding: "7px 14px", borderRadius: 10,
                                 border: "1.5px solid rgba(34,197,94,0.5)", background: "rgba(34,197,94,0.12)",
@@ -644,7 +850,7 @@ export function OrderManagement() {
         </div>
 
         <p style={{ textAlign: "center", fontSize: 11, color: "#8b6f84", marginTop: 16 }}>
-          {filtered.length} order{filtered.length !== 1 ? "s" : ""} shown · Updates reflect instantly on the customer's tracking page
+          {showArchived ? `${filteredArchived.length} archived record${filteredArchived.length !== 1 ? "s" : ""}` : `${filtered.length} order${filtered.length !== 1 ? "s" : ""} shown`} · Updates reflect instantly on the customer's tracking page
         </p>
       </div>
 
@@ -828,10 +1034,10 @@ export function OrderManagement() {
         </div>
       )}
 
-      {/* Clear confirmation modal */}
-      {clearTarget && (
+      {/* Archive confirmation modal */}
+      {archiveTarget && (
         <div
-          onClick={() => !clearing && setClearTarget(null)}
+          onClick={() => !archiving && setArchiveTarget(null)}
           style={{ position: "fixed", inset: 0, background: "rgba(74,46,66,0.5)", backdropFilter: "blur(4px)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
         >
           <div
@@ -839,25 +1045,25 @@ export function OrderManagement() {
             style={{ background: "#fff", borderRadius: 24, padding: "32px 28px", maxWidth: 420, width: "100%", boxShadow: "0 24px 80px rgba(74,46,66,0.2)", fontFamily: "system-ui, sans-serif" }}
           >
             <div style={{ textAlign: "center", marginBottom: 20 }}>
-              <div style={{ fontSize: 44, marginBottom: 12 }}>🗑️</div>
+              <div style={{ fontSize: 44, marginBottom: 12 }}>📦</div>
               <h2 style={{ margin: "0 0 8px", fontSize: 19, fontWeight: 700, color: "#4a2e42" }}>
-                {clearTarget === "all-completed" ? "Clear all completed orders?" :
-                 clearTarget === "all-declined" ? "Clear all declined orders?" :
-                 "Clear this order?"}
+                {archiveTarget === "all-completed" ? "Archive all completed orders?" :
+                 archiveTarget === "all-declined" ? "Archive all declined orders?" :
+                 "Archive this order?"}
               </h2>
               <p style={{ margin: 0, fontSize: 13, color: "#8b6f84", lineHeight: 1.6 }}>
-                {clearTarget === "all-completed"
-                  ? `This will remove all ${orders.filter(o => o.status === "completed").length} completed orders from your view.`
-                  : clearTarget === "all-declined"
-                  ? `This will remove all ${orders.filter(o => o.status === "declined").length} declined orders from your view.`
-                  : `Order ${(clearTarget as LiveOrder).orderId.slice(0, 8)} will be removed from your view.`}
-                <br />Customer records are preserved.
+                {archiveTarget === "all-completed"
+                  ? `This will archive all ${activeOrders.filter(o => o.status === "completed").length} completed orders.`
+                  : archiveTarget === "all-declined"
+                  ? `This will archive all ${activeOrders.filter(o => o.status === "declined").length} declined orders.`
+                  : `Order ${(archiveTarget as LiveOrder).orderId.slice(0, 8)} will be archived.`}
+                <br />All data is preserved and can be restored from the Archive view.
               </p>
             </div>
             <div style={{ display: "flex", gap: 10 }}>
               <button
-                onClick={() => setClearTarget(null)}
-                disabled={clearing}
+                onClick={() => setArchiveTarget(null)}
+                disabled={archiving}
                 style={{
                   flex: 1, padding: "12px 0", borderRadius: 12,
                   border: "1.5px solid rgba(216,159,200,0.4)", background: "#fff",
@@ -868,18 +1074,18 @@ export function OrderManagement() {
                 Cancel
               </button>
               <button
-                onClick={confirmClear}
-                disabled={clearing}
+                onClick={confirmArchive}
+                disabled={archiving}
                 style={{
                   flex: 1, padding: "12px 0", borderRadius: 12, border: "none",
-                  background: clearing ? "rgba(239,68,68,0.3)" : "linear-gradient(135deg,#f87171,#dc2626)",
+                  background: archiving ? "rgba(199,125,179,0.3)" : "linear-gradient(135deg,#d89fc8,#c77db3)",
                   color: "#fff", fontSize: 13, fontWeight: 700,
-                  cursor: clearing ? "not-allowed" : "pointer",
+                  cursor: archiving ? "not-allowed" : "pointer",
                   fontFamily: "system-ui, sans-serif",
                   display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
                 }}
               >
-                <Trash2 size={14} /> {clearing ? "Clearing…" : "Yes, clear"}
+                <Archive size={14} /> {archiving ? "Archiving…" : "Yes, archive"}
               </button>
             </div>
           </div>
@@ -1011,6 +1217,127 @@ export function OrderManagement() {
               >
                 <XCircle size={14} /> {declining ? "Declining…" : "Confirm Decline"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Order Confirmation Receipt Modal ── */}
+      {receiptOrder && (
+        <div
+          onClick={() => setReceiptOrder(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", backdropFilter: "blur(8px)", zIndex: 3000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, overflowY: "auto" }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: "#fff", borderRadius: 28, width: "100%", maxWidth: 460, boxShadow: "0 40px 120px rgba(0,0,0,0.45)", overflow: "hidden", fontFamily: "system-ui, sans-serif" }}
+          >
+            {/* Header */}
+            <div style={{ background: "linear-gradient(135deg, #f9eef7 0%, #f0dcea 100%)", padding: "28px 28px 22px", textAlign: "center", borderBottom: "1px solid rgba(216,159,200,0.3)" }}>
+              <div style={{ fontSize: 44, marginBottom: 6 }}>🎂</div>
+              <h2 style={{ margin: 0, fontFamily: "Georgia, serif", fontSize: 22, fontWeight: 400, color: "#4a2e42" }}>Order Confirmed!</h2>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 10, background: "rgba(34,197,94,0.12)", border: "1.5px solid rgba(34,197,94,0.4)", borderRadius: 100, padding: "5px 16px" }}>
+                <Check size={12} strokeWidth={3} color="#15803d" />
+                <span style={{ fontSize: 11, fontWeight: 800, color: "#15803d", letterSpacing: "0.07em" }}>PAYMENT ACCEPTED</span>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div style={{ padding: "20px 24px 24px" }}>
+              {/* Meta */}
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#8b6f84", marginBottom: 16, paddingBottom: 12, borderBottom: "1px solid rgba(216,159,200,0.15)" }}>
+                <span>Receipt No: <strong style={{ color: "#4a2e42", fontFamily: "monospace" }}>{receiptOrder.orderId.slice(0, 8).toUpperCase()}</strong></span>
+                <span>{new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+              </div>
+
+              {/* Customer */}
+              <div style={{ background: "rgba(249,238,247,0.6)", border: "1px solid rgba(216,159,200,0.2)", borderRadius: 14, padding: "12px 16px", marginBottom: 14 }}>
+                <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" as const, color: "#c77db3", marginBottom: 8 }}>Customer</div>
+                <div style={{ fontWeight: 700, fontSize: 14, color: "#4a2e42" }}>{receiptOrder.customerName}</div>
+                <div style={{ fontSize: 12, color: "#8b6f84", marginTop: 3 }}>{receiptOrder.customerPhone}</div>
+              </div>
+
+              {/* Items */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" as const, color: "#8b6f84", marginBottom: 8 }}>Order Items</div>
+                {(receiptOrder.items ?? []).map((item, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < (receiptOrder.items?.length ?? 0) - 1 ? "1px solid rgba(216,159,200,0.1)" : "none" }}>
+                    <div>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "#4a2e42" }}>{item.name}</span>
+                      <span style={{ fontSize: 11, color: "#c77db3", fontWeight: 700, marginLeft: 6 }}>×{item.quantity}</span>
+                    </div>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "#4a2e42" }}>₱{(item.price * item.quantity).toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Totals */}
+              <div style={{ background: "rgba(249,238,247,0.5)", border: "1px solid rgba(216,159,200,0.2)", borderRadius: 12, padding: "12px 16px", marginBottom: 14 }}>
+                {receiptOrder.subtotal !== receiptOrder.total && (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#6b5263", marginBottom: 5 }}>
+                    <span>Subtotal</span><span>₱{receiptOrder.subtotal.toLocaleString()}</span>
+                  </div>
+                )}
+                {receiptOrder.rushFee > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#6b5263", marginBottom: 5 }}>
+                    <span>⚡ Rush Fee</span><span>₱{receiptOrder.rushFee.toLocaleString()}</span>
+                  </div>
+                )}
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 800, color: "#4a2e42", borderTop: "1.5px solid rgba(199,125,179,0.3)", paddingTop: 8 }}>
+                  <span>Order Total</span><span style={{ color: "#c77db3" }}>₱{receiptOrder.total.toLocaleString()}</span>
+                </div>
+              </div>
+
+              {/* Payment */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" as const, color: "#8b6f84", marginBottom: 8 }}>Payment</div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#6b5263", marginBottom: 4 }}>
+                  <span>Amount Paid</span>
+                  <span style={{ fontWeight: 700, color: "#15803d" }}>
+                    ₱{(normalizePaymentType(receiptOrder) === "full" ? receiptOrder.total : (receiptOrder.downpayment || receiptOrder.amountDue || 0)).toLocaleString()}
+                  </span>
+                </div>
+                {getRemainingBalance(receiptOrder) > 0 ? (
+                  <div style={{ background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.4)", borderRadius: 10, padding: "9px 12px", marginTop: 6 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#92400e", fontWeight: 700 }}>
+                      <span>⚠️ Remaining Balance</span>
+                      <span>₱{getRemainingBalance(receiptOrder).toLocaleString()}</span>
+                    </div>
+                    <div style={{ fontSize: 10, color: "#b45309", marginTop: 3 }}>Due on or before pickup</div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: "#15803d", fontWeight: 700, marginTop: 4 }}>✓ Fully Paid</div>
+                )}
+              </div>
+
+              {/* Pickup */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
+                {[
+                  { label: "Pickup Date", value: receiptOrder.pickupDate },
+                  { label: "Pickup Time", value: receiptOrder.pickupTime },
+                ].map(({ label, value }) => (
+                  <div key={label} style={{ background: "rgba(59,130,246,0.06)", border: "1px solid rgba(59,130,246,0.2)", borderRadius: 12, padding: "10px 14px" }}>
+                    <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase" as const, color: "#1d4ed8", marginBottom: 4 }}>{label}</div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: "#1e3a8a" }}>{value || "—"}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Actions */}
+              <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  onClick={() => printConfirmationReceipt(receiptOrder)}
+                  style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "13px 0", borderRadius: 14, border: "none", background: "linear-gradient(135deg,#d89fc8,#c77db3)", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "system-ui, sans-serif", boxShadow: "0 4px 16px rgba(199,125,179,0.35)" }}
+                >
+                  <Printer size={15} /> Print Receipt
+                </button>
+                <button
+                  onClick={() => setReceiptOrder(null)}
+                  style={{ padding: "13px 20px", borderRadius: 14, border: "1.5px solid rgba(216,159,200,0.4)", background: "#fff", color: "#8b6f84", fontSize: 13, cursor: "pointer", fontFamily: "system-ui, sans-serif" }}
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>

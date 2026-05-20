@@ -95,6 +95,10 @@ export function CakeCustomization({ onGoToCart, autoOpenUpload, isGuest = false,
   const [bdoQR, setBdoQR] = useState("");
   const [gcashNumber, setGcashNumber] = useState("");
   const [bdoAccount, setBdoAccount] = useState("");
+  const [gcashLabel, setGcashLabel] = useState("GCash");
+  const [bdoLabel, setBdoLabel] = useState("BDO Bank Transfer");
+  const [gcashColor, setGcashColor] = useState("#1d4ed8");
+  const [bdoColor, setBdoColor] = useState("#c2410c");
 
   useEffect(() => {
     const unsub = onValue(ref(db, "paymentQR"), (snap) => {
@@ -103,6 +107,10 @@ export function CakeCustomization({ onGoToCart, autoOpenUpload, isGuest = false,
       setBdoQR(data.bdoQR ?? "");
       setGcashNumber(data.gcashNumber ?? "");
       setBdoAccount(data.bdoAccount ?? "");
+      setGcashLabel(data.gcashLabel ?? "GCash");
+      setBdoLabel(data.bdoLabel ?? "BDO Bank Transfer");
+      setGcashColor(data.gcashColor ?? "#1d4ed8");
+      setBdoColor(data.bdoColor ?? "#c2410c");
     });
     return () => unsub();
   }, []);
@@ -1019,49 +1027,36 @@ export function CakeCustomization({ onGoToCart, autoOpenUpload, isGuest = false,
           </DialogHeader>
 
           <div className="space-y-4 pt-4">
-            {/* GCash Payment */}
-            <div style={{ border: "1.5px solid rgba(59,130,246,0.35)", borderRadius: 16, padding: "16px", background: "rgba(59,130,246,0.04)" }}>
-              <p style={{ margin: "0 0 4px", fontWeight: 700, fontSize: 14, color: "#1d4ed8" }}>GCash Payment</p>
-              <p style={{ margin: "0 0 14px", fontSize: 12, color: "#3b82f6" }}>Scan with GCash App</p>
-              <div style={{ background: "#fff", borderRadius: 12, padding: 12, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12, border: "1px solid rgba(59,130,246,0.15)" }}>
-                {gcashQR ? (
-                  <img src={gcashQR} alt="GCash QR" style={{ width: 180, height: 180, objectFit: "contain", borderRadius: 8 }} />
-                ) : (
-                  <div style={{ width: 180, height: 180, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(59,130,246,0.06)", borderRadius: 10, border: "2px dashed rgba(59,130,246,0.3)" }}>
-                    <div style={{ fontSize: 36, marginBottom: 10 }}>📱</div>
-                    <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "#1d4ed8", textAlign: "center" }}>GCash QR</p>
-                    <p style={{ margin: "4px 0 0", fontSize: 10, color: "#93c5fd", textAlign: "center", padding: "0 12px" }}>Upload in Store Settings</p>
+            {[
+              { label: gcashLabel, color: gcashColor, qr: gcashQR, account: gcashNumber },
+              { label: bdoLabel,   color: bdoColor,   qr: bdoQR,   account: bdoAccount  },
+            ].map(({ label, color, qr, account }, i) => {
+              const r = parseInt(color.slice(1,3),16), g = parseInt(color.slice(3,5),16), b = parseInt(color.slice(5,7),16);
+              const borderCol = `rgba(${r},${g},${b},0.35)`;
+              const bgCol = `rgba(${r},${g},${b},0.04)`;
+              const bgLight = `rgba(${r},${g},${b},0.06)`;
+              return (
+                <div key={i} style={{ border: `1.5px solid ${borderCol}`, borderRadius: 16, padding: "16px", background: bgCol }}>
+                  <p style={{ margin: "0 0 14px", fontWeight: 700, fontSize: 14, color }}>{label}</p>
+                  <div style={{ background: "#fff", borderRadius: 12, padding: 12, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12, border: `1px solid ${borderCol}` }}>
+                    {qr ? (
+                      <img src={qr} alt={`${label} QR`} style={{ width: 180, height: 180, objectFit: "contain", borderRadius: 8 }} />
+                    ) : (
+                      <div style={{ width: 180, height: 180, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: bgLight, borderRadius: 10, border: `2px dashed ${borderCol}` }}>
+                        <div style={{ fontSize: 36, marginBottom: 10 }}>{i === 0 ? "📱" : "🏦"}</div>
+                        <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color, textAlign: "center" }}>{label} QR</p>
+                        <p style={{ margin: "4px 0 0", fontSize: 10, color: "#8b6f84", textAlign: "center", padding: "0 12px" }}>Upload in Store Settings</p>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-              <div style={{ fontSize: 12, color: "#1d4ed8", lineHeight: 1.7 }}>
-                <p style={{ margin: 0 }}><strong>Account Name:</strong> Cake with Joy</p>
-                {gcashNumber && <p style={{ margin: 0 }}><strong>Number:</strong> {gcashNumber}</p>}
-                <p style={{ margin: 0 }}><strong>Amount:</strong> ₱{(finalPrice * 0.5).toLocaleString()}</p>
-              </div>
-            </div>
-
-            {/* BDO Payment */}
-            <div style={{ border: "1.5px solid rgba(234,88,12,0.35)", borderRadius: 16, padding: "16px", background: "rgba(234,88,12,0.04)" }}>
-              <p style={{ margin: "0 0 4px", fontWeight: 700, fontSize: 14, color: "#c2410c" }}>BDO Bank Transfer</p>
-              <p style={{ margin: "0 0 14px", fontSize: 12, color: "#ea580c" }}>Scan with BDO App or use account details</p>
-              <div style={{ background: "#fff", borderRadius: 12, padding: 12, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12, border: "1px solid rgba(234,88,12,0.15)" }}>
-                {bdoQR ? (
-                  <img src={bdoQR} alt="BDO QR" style={{ width: 180, height: 180, objectFit: "contain", borderRadius: 8 }} />
-                ) : (
-                  <div style={{ width: 180, height: 180, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(234,88,12,0.06)", borderRadius: 10, border: "2px dashed rgba(234,88,12,0.3)" }}>
-                    <div style={{ fontSize: 36, marginBottom: 10 }}>🏦</div>
-                    <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "#c2410c", textAlign: "center" }}>BDO QR</p>
-                    <p style={{ margin: "4px 0 0", fontSize: 10, color: "#fdba74", textAlign: "center", padding: "0 12px" }}>Upload in Store Settings</p>
+                  <div style={{ fontSize: 12, color, lineHeight: 1.7 }}>
+                    <p style={{ margin: 0 }}><strong>Account Name:</strong> Cake with Joy</p>
+                    {account && <p style={{ margin: 0 }}><strong>Account:</strong> {account}</p>}
+                    <p style={{ margin: 0 }}><strong>Amount:</strong> ₱{(finalPrice * 0.5).toLocaleString()}</p>
                   </div>
-                )}
-              </div>
-              <div style={{ fontSize: 12, color: "#c2410c", lineHeight: 1.7 }}>
-                <p style={{ margin: 0 }}><strong>Account Name:</strong> Cake with Joy</p>
-                {bdoAccount && <p style={{ margin: 0 }}><strong>Account Number:</strong> {bdoAccount}</p>}
-                <p style={{ margin: 0 }}><strong>Amount:</strong> ₱{(finalPrice * 0.5).toLocaleString()}</p>
-              </div>
-            </div>
+                </div>
+              );
+            })}
 
             {/* Payment Instructions */}
             <div className="bg-muted/50 p-3 rounded-lg text-xs space-y-2">

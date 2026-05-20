@@ -1,8 +1,10 @@
 import axios from "axios";
 import { auth } from "./firebase";
 
+const configuredApiUrl = import.meta.env.VITE_API_URL?.trim();
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:8000/api/v1",
+  baseURL: configuredApiUrl || undefined,
   timeout: 10000,
 });
 
@@ -28,3 +30,4 @@ api.interceptors.response.use(
 );
 
 export default api;
+export const isApiConfigured = Boolean(configuredApiUrl);
