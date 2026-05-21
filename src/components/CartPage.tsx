@@ -678,6 +678,7 @@ export function CartPage({ onBack, onOrderPlaced, isGuest = false, onSignIn }: C
           isRushOrder={rushOrder}
           userId={user.uid}
           userName={user.displayName ?? user.email ?? "Customer"}
+          userEmail={user.email ?? ""}
           onClose={() => setShowCheckout(false)}
           onSuccess={() => {
             clearCart();

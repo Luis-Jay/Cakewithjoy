@@ -15,6 +15,7 @@ interface CheckoutModalProps {
   isRushOrder: boolean;
   userId: string;
   userName: string | null;
+  userEmail: string | null;
   onClose: () => void;
   onSuccess: () => void;
 }
@@ -56,7 +57,7 @@ const s: Record<string, any> = {
   successWrap: { padding: "40px 24px", textAlign: "center" as const },
 };
 
-export function CheckoutModal({ items, subtotal, rushFee, total, downpayment, amountDue, paymentType, isRushOrder, userId, userName, onClose, onSuccess }: CheckoutModalProps) {
+export function CheckoutModal({ items, subtotal, rushFee, total, downpayment, amountDue, paymentType, isRushOrder, userId, userName, userEmail, onClose, onSuccess }: CheckoutModalProps) {
   const [step, setStep] = useState(1); // 1: details, 2: T&C, 3: payment
   const [name, setName] = useState(userName ?? "");
   const [phone, setPhone] = useState("");
@@ -148,6 +149,7 @@ export function CheckoutModal({ items, subtotal, rushFee, total, downpayment, am
 
       const orderData = {
         customerId: userId,
+        customerEmail: userEmail ?? "",
         customerName: name.trim(),
         customerPhone: phone.trim(),
         items: cleanItems,

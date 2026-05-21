@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { ref, onValue, update } from "firebase/database";
 import { db } from "../config/firebase";
 import { X, Check, XCircle, Archive, RotateCcw, StickyNote, Printer } from "lucide-react";
+import { sendOrderStatusEmail } from "../utils/emailNotifications";
 
 type OrderStatus = "pending" | "confirmed" | "baking" | "quality_check" | "ready" | "completed" | "declined";
 type PaymentType = "downpayment" | "deposit" | "full";
@@ -18,6 +19,7 @@ interface LiveOrder {
   customerId: string;
   customerName: string;
   customerPhone: string;
+  customerEmail?: string;
   items: Array<{ id: string; name: string; price: number; quantity: number; cakeImage?: string; description?: string }>;
   subtotal: number;
   rushFee: number;
@@ -132,10 +134,26 @@ export function OrderManagement() {
   const updateStatus = async (order: LiveOrder, newStatus: OrderStatus) => {
     setUpdating(order.orderId);
     try {
-      // allOrders is the source of truth — customer tracking reads from here
       await update(ref(db, `allOrders/${order.orderId}`), { status: newStatus });
-      // Best-effort mirror write; ignore if Firebase rules block it
       update(ref(db, `orders/${order.customerId}/${order.orderId}`), { status: newStatus }).catch(() => {});
+      if (order.customerEmail) {
+        const remaining =
+          order.paymentType !== "full"
+            ? Math.max((order.total ?? 0) - (order.downpayment ?? 0), 0)
+            : 0;
+        sendOrderStatusEmail({
+          customerEmail: order.customerEmail,
+          customerName: order.customerName,
+          orderId: order.orderId,
+          status: newStatus,
+          pickupDate: order.pickupDate,
+          pickupTime: order.pickupTime,
+          total: order.total,
+          downpayment: order.downpayment,
+          remainingBalance: remaining > 0 ? remaining : undefined,
+          items: order.items,
+        });
+      }
     } catch (e) {
       console.error("Failed to update status", e);
     } finally {
@@ -156,10 +174,19 @@ export function OrderManagement() {
     setDeclining(true);
     try {
       const payload = { status: "declined" as OrderStatus, declineReason: finalReason };
-      // allOrders is the source of truth — customer tracking reads from here
       await update(ref(db, `allOrders/${declineTarget.orderId}`), payload);
-      // Best-effort mirror write; ignore if Firebase rules block it
       update(ref(db, `orders/${declineTarget.customerId}/${declineTarget.orderId}`), payload).catch(() => {});
+      if (declineTarget.customerEmail) {
+        sendOrderStatusEmail({
+          customerEmail: declineTarget.customerEmail,
+          customerName: declineTarget.customerName,
+          orderId: declineTarget.orderId,
+          status: "declined",
+          declineReason: finalReason,
+          total: declineTarget.total,
+          items: declineTarget.items,
+        });
+      }
       setDeclineTarget(null);
     } catch (e) {
       console.error("Failed to decline order", e);
@@ -218,6 +245,24 @@ export function OrderManagement() {
       await update(ref(db, `allOrders/${order.orderId}`), { status: "confirmed" });
       update(ref(db, `orders/${order.customerId}/${order.orderId}`), { status: "confirmed" }).catch(() => {});
       setReceiptOrder({ ...order, status: "confirmed" });
+      if (order.customerEmail) {
+        const remaining =
+          order.paymentType !== "full"
+            ? Math.max((order.total ?? 0) - (order.downpayment ?? 0), 0)
+            : 0;
+        sendOrderStatusEmail({
+          customerEmail: order.customerEmail,
+          customerName: order.customerName,
+          orderId: order.orderId,
+          status: "confirmed",
+          pickupDate: order.pickupDate,
+          pickupTime: order.pickupTime,
+          total: order.total,
+          downpayment: order.downpayment,
+          remainingBalance: remaining > 0 ? remaining : undefined,
+          items: order.items,
+        });
+      }
     } catch (e) {
       console.error("Failed to confirm order", e);
     } finally {
@@ -767,6 +812,18 @@ export function OrderManagement() {
                                     remainingBalanceVerified: true,
                                   });
                                   update(ref(db, `orders/${order.customerId}/${order.orderId}`), { status: "completed", remainingBalanceVerified: true }).catch(() => {});
+                                  if (order.customerEmail) {
+                                    sendOrderStatusEmail({
+                                      customerEmail: order.customerEmail,
+                                      customerName: order.customerName,
+                                      orderId: order.orderId,
+                                      status: "completed",
+                                      pickupDate: order.pickupDate,
+                                      pickupTime: order.pickupTime,
+                                      total: order.total,
+                                      items: order.items,
+                                    });
+                                  }
                                 } finally { setUpdating(null); }
                               }}
                               style={{
