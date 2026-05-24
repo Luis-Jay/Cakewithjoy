@@ -79,11 +79,23 @@ const STATUS_STEP_IDX: Record<OrderStatus, number> = {
   pending: 0, confirmed: 1, baking: 2, ready: 3, completed: 4,
 };
 
+const HERO_SLIDES = [
+  { image: "/carousel/cake image banner.jpg",                                          label: "Handcrafted with Love",           tagline: "Custom Cakes for Every Occasion" },
+  { image: "/carousel/505229727_1131936885621924_823247686828427728_n.jpg",            label: "Made Fresh Every Day",            tagline: "Baked with Care, Served with Joy" },
+  { image: "/carousel/508431682_1139342061548073_8130816825140275833_n.jpg",           label: "Custom Cakes for Every Occasion", tagline: "Tell us your dream — we'll bake it" },
+  { image: "/carousel/504958487_1131936892288590_3345059400322916159_n.jpg",           label: "Celebrate Every Moment",          tagline: "Special occasions deserve special cakes" },
+  { image: "/carousel/508388479_1139342071548072_1763786820409708618_n.jpg",           label: "Crafted with Passion",            tagline: "Each cake tells your unique story" },
+  { image: "/carousel/508355465_1139342051548074_8569801778384049735_n.jpg",           label: "Sweet Memories Start Here",       tagline: "Order yours and make it unforgettable" },
+  { image: "/carousel/504861837_1131936902288589_3487358166808670383_n.jpg",           label: "Your Perfect Cake Awaits",        tagline: "Handcrafted just for you" },
+];
+
 export function CustomerHomepage({ onNavigate, isGuest = false }: CustomerHomepageProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const user = useAuthStore((s) => s.user);
   const [latestOrder, setLatestOrder] = useState<LatestOrder | null>(null);
   const [featuredCakes, setFeaturedCakes] = useState<{ id: string; name: string; category: string; image: string; price: string }[]>([]);
+  const [heroSlide, setHeroSlide] = useState(0);
+  const heroTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Load featured cakes: cross-reference featuredCakeIds with menuItems
   useEffect(() => {
@@ -138,6 +150,22 @@ export function CustomerHomepage({ onNavigate, isGuest = false }: CustomerHomepa
     return () => unsub();
   }, []);
 
+  // Hero carousel auto-advance
+  useEffect(() => {
+    heroTimerRef.current = setInterval(() => {
+      setHeroSlide((i) => (i + 1) % HERO_SLIDES.length);
+    }, 5000);
+    return () => { if (heroTimerRef.current) clearInterval(heroTimerRef.current); };
+  }, []);
+
+  const goToSlide = (idx: number) => {
+    setHeroSlide(idx);
+    if (heroTimerRef.current) clearInterval(heroTimerRef.current);
+    heroTimerRef.current = setInterval(() => {
+      setHeroSlide((i) => (i + 1) % HERO_SLIDES.length);
+    }, 5000);
+  };
+
   useEffect(() => {
     if (!user) return;
     const ordersRef = dbRef(db, `orders/${user.uid}`);
@@ -187,36 +215,171 @@ export function CustomerHomepage({ onNavigate, isGuest = false }: CustomerHomepa
         );
       })()}
 
-      {/* ── Hero ── */}
-      <div style={S.hero}>
-        <div style={S.heroDeco} />
-        <div style={S.heroDeco2} />
-        <div style={{ maxWidth: 960, margin: "0 auto", position: "relative" }}>
-          <span style={S.heroLabel}>Welcome to Cake with Joy 🎂</span>
-          <h1 style={S.heroTitle}>Your perfect cake<br />starts here</h1>
-          <p style={S.heroSub}>
-            Handcrafted cakes for every occasion. Upload your design or let our bakers create something special just for you.
-          </p>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+      {/* ── Hero Carousel ── */}
+      {(() => {
+        const total = HERO_SLIDES.length;
+        const safeIdx = heroSlide % total;
+        const slide = HERO_SLIDES[safeIdx];
+
+        return (
+          <div style={{ background: "#F4E9F2", padding: "24px 24px 0" }}>
+          <div style={{ position: "relative", width: "100%", maxWidth: 960, height: 360, overflow: "hidden", margin: "0 auto", borderRadius: 24, boxShadow: "0 8px 40px rgba(74,46,66,0.15)" }}>
+
+            {/* Slides */}
+            {HERO_SLIDES.map((s, i) => (
+              <div
+                key={i}
+                style={{
+                  position: "absolute", inset: 0,
+                  opacity: i === safeIdx ? 1 : 0,
+                  transition: "opacity 0.9s ease",
+                  background: "#2d1b2e",
+                }}
+              >
+                <img
+                  src={s.image}
+                  alt={s.label}
+                  style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center center", opacity: 0.65 }}
+                />
+                <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to right, rgba(74,46,66,0.82) 0%, rgba(74,46,66,0.38) 55%, rgba(74,46,66,0.08) 100%)" }} />
+              </div>
+            ))}
+
+            {/* Text overlay */}
+            <div style={{
+              position: "absolute", inset: 0,
+              display: "flex", flexDirection: "column",
+              justifyContent: "center",
+              padding: "0 36px",
+              maxWidth: 520,
+            }}>
+              <span style={{
+                display: "inline-block",
+                fontSize: 11, fontWeight: 700, letterSpacing: "0.14em",
+                textTransform: "uppercase",
+                color: "#f9c8e8",
+                marginBottom: 12,
+                background: "rgba(255,255,255,0.12)",
+                padding: "4px 12px", borderRadius: 100,
+                width: "fit-content",
+              }}>
+                {slide.label}
+              </span>
+              <h1 style={{
+                margin: "0 0 14px",
+                fontSize: "clamp(24px, 4vw, 36px)",
+                fontWeight: 400,
+                fontFamily: "Georgia, serif",
+                lineHeight: 1.15,
+                color: "#fff",
+              }}>
+                {slide.tagline}
+              </h1>
+              <p style={{
+                margin: "0 0 28px",
+                fontSize: 15,
+                color: "rgba(255,255,255,0.85)",
+                lineHeight: 1.65,
+                maxWidth: 420,
+              }}>
+                Handcrafted cakes for every occasion. Upload your design or let our bakers create something special just for you.
+              </p>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => onNavigate?.("customize")}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 8,
+                    background: "linear-gradient(135deg,#d89fc8,#c77db3)",
+                    color: "#fff", border: "none", borderRadius: 100,
+                    padding: "13px 28px", fontSize: 14, fontWeight: 600,
+                    cursor: "pointer",
+                    boxShadow: "0 6px 20px rgba(199,125,179,0.45)",
+                    transition: "all 0.2s",
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-2px)"; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.transform = "none"; }}
+                >
+                  Start Customizing <ChevronRight size={16} />
+                </button>
+                <button
+                  onClick={() => onNavigate?.("menu")}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 8,
+                    background: "rgba(255,255,255,0.15)",
+                    backdropFilter: "blur(8px)",
+                    color: "#fff",
+                    border: "1.5px solid rgba(255,255,255,0.35)",
+                    borderRadius: 100,
+                    padding: "13px 24px", fontSize: 14, fontWeight: 600,
+                    cursor: "pointer",
+                    transition: "all 0.2s",
+                  }}
+                >
+                  Browse Menu
+                </button>
+              </div>
+            </div>
+
+            {/* Left arrow */}
             <button
-              style={S.heroCta}
-              onClick={() => onNavigate?.("customize")}
-              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-2px)"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 10px 28px rgba(199,125,179,0.5)"; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.transform = "none"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 6px 20px rgba(199,125,179,0.4)"; }}
+              onClick={() => goToSlide((safeIdx - 1 + total) % total)}
+              style={{
+                position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)",
+                width: 40, height: 40, borderRadius: "50%",
+                background: "rgba(255,255,255,0.2)", backdropFilter: "blur(8px)",
+                border: "1.5px solid rgba(255,255,255,0.3)",
+                color: "#fff", cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                transition: "all 0.2s", zIndex: 2,
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.35)")}
+              onMouseLeave={e => (e.currentTarget.style.background = "rgba(255,255,255,0.2)")}
             >
-              Start Customizing <ChevronRight size={16} />
+              <ChevronLeft size={20} />
             </button>
+
+            {/* Right arrow */}
             <button
-              style={{ ...S.outlineBtn, padding: "13px 24px", fontSize: 14 }}
-              onClick={() => onNavigate?.("menu")}
-              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(216,159,200,0.1)"; (e.currentTarget as HTMLButtonElement).style.color = "#4a2e42"; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "none"; (e.currentTarget as HTMLButtonElement).style.color = "#8b6f84"; }}
+              onClick={() => goToSlide((safeIdx + 1) % total)}
+              style={{
+                position: "absolute", right: 16, top: "50%", transform: "translateY(-50%)",
+                width: 40, height: 40, borderRadius: "50%",
+                background: "rgba(255,255,255,0.2)", backdropFilter: "blur(8px)",
+                border: "1.5px solid rgba(255,255,255,0.3)",
+                color: "#fff", cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                transition: "all 0.2s", zIndex: 2,
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.35)")}
+              onMouseLeave={e => (e.currentTarget.style.background = "rgba(255,255,255,0.2)")}
             >
-              Browse Menu
+              <ChevronRight size={20} />
             </button>
+
+            {/* Dot indicators */}
+            <div style={{
+              position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)",
+              display: "flex", gap: 8, zIndex: 2,
+            }}>
+              {HERO_SLIDES.map((_, i) => (
+                <button
+                  key={i}
+                  onClick={() => goToSlide(i)}
+                  style={{
+                    width: i === safeIdx ? 24 : 8,
+                    height: 8, borderRadius: 100,
+                    background: i === safeIdx ? "#fff" : "rgba(255,255,255,0.45)",
+                    border: "none", cursor: "pointer", padding: 0,
+                    transition: "all 0.35s ease",
+                  }}
+                />
+              ))}
+            </div>
+
           </div>
-        </div>
-      </div>
+          </div>
+        );
+      })()}
 
       <div style={{ maxWidth: 960, margin: "0 auto", padding: "32px 24px 80px" }}>
 
